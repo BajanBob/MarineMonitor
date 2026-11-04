@@ -145,9 +145,9 @@ jobs:
       - name: Clear the old files from this release (overwriting in parallel is unreliable)
         env: { GH_TOKEN: '${{ github.token }}', TAG: "${{ github.event.inputs.release_tag || format('v{0}', steps.v.outputs.version) }}" }
         run: |
-          for id in $(gh api "repos/${{ github.repository }}/releases/tags/$TAG" -q '.assets[].id' 2>/dev/null); do
-            gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id"
-          done
+          ids=$(gh api "repos/${{ github.repository }}/releases/tags/$TAG" -q '.assets[].id' 2>/dev/null | grep -E '^[0-9]+$' || true)
+          for id in $ids; do gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id" || true; done
+          echo "Cleared $(echo $ids | wc -w) old file(s) from $TAG"
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.release_tag || format('v{0}', steps.v.outputs.version) }}
