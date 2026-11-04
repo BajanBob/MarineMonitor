@@ -157,6 +157,36 @@ class Civ(unittest.TestCase):
         self.assertEqual(icom_civ.bcd_freq(156_525_000).hex(), '0050525601')
 
 
+class Kenwood(unittest.TestCase):
+    def test_fo_frequency_rewrite(self):
+        import kenwood_cat
+        fo = 'FO 1,0144390000,0,0,0,0,0,0,0,0,0,08,08,000,0,0000000,0'
+        self.assertEqual(kenwood_cat.fo_with_freq(fo, 161_975_000), 'FO 1,0161975000,0,0,0,0,0,0,0,0,0,08,08,000,0,0000000,0')
+        with self.assertRaises(ValueError):
+            kenwood_cat.fo_with_freq('N', 1)
+
+    def test_tune_sequence(self):
+        import kenwood_cat
+        r = kenwood_cat.Rig(None, band='B')
+        r.main_band(); r.tune(162_025_000, 'FM'); r.tune(8_412_800, 'USB')
+        self.assertEqual(r.sent[0], 'BC 1')
+        self.assertEqual(r.sent[1:4], ['FO 1', 'FO 1,0162025000,0,0,0,0,0,0,0,0,0,08,08,000,0,0000000,0', 'MD 1,0'])
+        self.assertEqual(r.sent[-1], 'MD 1,4')
+        self.assertIn('FO 1,0008412800', r.sent[-2])
+
+    def test_d74_receiver_decodes_detect_audio(self):
+        import receiver, kenwood_cat
+        heard = []
+        rig = kenwood_cat.Rig(None)
+        rx = receiver.SoftReceiver(lambda line, band, extra=None: heard.append((band, line)), rig=rig, rate=RATE, mode='ais-b', label='TH-D74', key='thd74')
+        self.assertIn('FO 1,0162025000', rig.sent[-2])
+        rx.feed(ais_audio(bits_of(Ais.PAYLOAD))); rx.flush()
+        self.assertEqual(heard[0][0], 'AIS 2 (Ch 88B)')
+        rx.set_mode('dsc70')
+        self.assertEqual(rx.status()['channel'], 'DSC Ch 70 (TH-D74)')
+        self.assertEqual(rx.status()['rig'], 'thd74')
+
+
 class Scan(unittest.TestCase):
     def test_plans(self):
         import receiver

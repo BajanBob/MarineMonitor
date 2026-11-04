@@ -229,6 +229,7 @@ export async function getNavWarnings(fetchImpl = globalThis.fetch) {
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://tile.openstreetmap.org https://*.basemaps.cartocdn.com https://tiles.openseamap.org; connect-src 'self' ws: wss: https:; frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
 
+const cleanRig = (r) => (r && typeof r === 'object' ? { rig: String(r.rig || '').slice(0, 12), label: String(r.label || '').slice(0, 20), mode: String(r.mode || '').slice(0, 12), modeName: String(r.modeName || '').slice(0, 60), channel: String(r.channel || '').slice(0, 60), freq: +r.freq || null, dwell: +r.dwell || null } : null);
 export function startRelay({ port = +process.env.PORT || 8800, host = process.env.HOST || '127.0.0.1', fetchImpl = globalThis.fetch, aisKey = process.env.AISSTREAM_KEY || '', feedKey = process.env.FEED_KEY || '', now = Date.now, WebSocketImpl } = {}) {
   const fleet = createFleet({ now });
   const decoder = new AisDecoder();
@@ -282,7 +283,7 @@ export function startRelay({ port = +process.env.PORT || 8800, host = process.en
         for await (const c of req) { size += c.length; if (size > 512 * 1024) return send(413, { error: 'too large' }); chunks.push(c); }
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
         const n = ingestFeed(fleet, decoder, body); lastFeed = now();
-        if (body.bands && typeof body.bands === 'object') rfStatus = { bands: Object.fromEntries(Object.entries(body.bands).slice(0, 40).map(([k, v]) => [String(k).slice(0, 60), { live: !!v?.live, count: +v?.count || 0 }])), rx: body.rx && typeof body.rx === 'object' ? { modeName: String(body.rx.modeName || '').slice(0, 60), channel: String(body.rx.channel || '').slice(0, 60), freq: +body.rx.freq || null } : null };
+        if (body.bands && typeof body.bands === 'object') rfStatus = { bands: Object.fromEntries(Object.entries(body.bands).slice(0, 40).map(([k, v]) => [String(k).slice(0, 60), { live: !!v?.live, count: +v?.count || 0 }])), rx: cleanRig(body.rx), rigs: body.rigs && typeof body.rigs === 'object' ? Object.fromEntries(Object.entries(body.rigs).slice(0, 4).filter(([k]) => /^[a-z0-9]{2,12}$/.test(k)).map(([k, v]) => [k, cleanRig(v)])) : null };
         return send(200, { ok: true, accepted: n });
       }
       const f = req.method === 'GET' ? files[p] : null;

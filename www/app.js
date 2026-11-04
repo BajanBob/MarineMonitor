@@ -289,23 +289,28 @@ const BAND_B = [['AIS 1 (Ch 87B)', '161.975 MHz · FM'], ['AIS 2 (Ch 88B)', '162
 const BAND_C = [['NAVTEX (international)', '518 kHz'], ['NAVTEX (national)', '490 kHz'], ['EPIRB / PLB (COSPAS-SARSAT)', '406.0–406.1 MHz'], ['Homing', '121.5 MHz'], ['Inmarsat-C EGC SafetyNET', '1537–1545 MHz (L-band)']];
 const RX_MODES = [['ais-scan', 'AIS scan', 'Alternate AIS 1 (87B) and AIS 2 (88B)'], ['ais-a', 'AIS 1', 'Ch 87B only'], ['ais-b', 'AIS 2', 'Ch 88B only'], ['dsc70', 'DSC 70', 'VHF DSC Ch 70 only'], ['ais-dsc', 'AIS + DSC', 'AIS 1 → AIS 2 → DSC 70 in turn'], ['hf-dsc', 'HF DSC', 'MF/HF DSC distress frequencies in turn']];
 let rxWs = null, rxStatus = null;
+const RIGS = [['ic9100', 'IC-9100'], ['thd74', 'TH-D74']];
+function rigChans(label) { return BAND_B.map(([n, f]) => (n.startsWith('DSC Ch 70') ? [`DSC Ch 70 (${label})`, '156.525 MHz · FM (backup to the UM435)'] : [n, f])); }
 function renderRx() {
   const heard = (k) => rxStatus?.bands?.[k];
-  const cur = rxStatus?.rx;
-  const li = ([n, f]) => { const h = heard(n), on = cur?.channel === n; return el('li', { class: on ? 'tuned' : '' }, el('div', {}, el('div', { text: `${on ? '▶ ' : ''}${n}` }), el('div', { class: 'f', text: f })), el('span', { class: `st ${h?.live ? 'live' : ''}`, text: h?.live ? `live${h.count ? ` · ${h.count}` : ''}` : rxWs || rfFeedAt ? 'idle' : 'no receiver' })); };
-  $('#band-a').replaceChildren(...BAND_A.map(li)); $('#band-b').replaceChildren(...BAND_B.map(li)); $('#band-c').replaceChildren(...BAND_C.map(li));
-  $('#rx-modes').replaceChildren(...RX_MODES.map(([v, label, tip]) => el('button', { type: 'button', class: cur?.mode === v || (!cur && S.rxMode === v) ? 'on' : '', text: label, title: `${tip}${rxWs ? '' : ' (connect to the station helper on the local network to change)'}`, disabled: !rxWs, onclick: () => tune(v) })));
-  if (cur?.dwell) $('#rx-dwell').value = cur.dwell;
-  $('#rx-dwell').disabled = !rxWs;
-  $('#rx-now').textContent = cur ? `IC-9100: ${cur.modeName} · now on ${cur.channel}${cur.freq ? ` (${(cur.freq / 1e6).toFixed(cur.freq < 30e6 ? 4 : 3)} MHz)` : ''}` : 'IC-9100 not reporting yet.';
+  const rigs = rxStatus?.rigs || (rxStatus?.rx ? { [rxStatus.rx.rig || 'ic9100']: rxStatus.rx } : {});
+  const li = (cur) => ([n, f]) => { const h = heard(n), on = cur?.channel === n; return el('li', { class: on ? 'tuned' : '' }, el('div', {}, el('div', { text: `${on ? '▶ ' : ''}${n}` }), el('div', { class: 'f', text: f })), el('span', { class: `st ${h?.live ? 'live' : ''}`, text: h?.live ? `live${h.count ? ` · ${h.count}` : ''}` : rxWs || rfFeedAt ? 'idle' : 'no receiver' })); };
+  $('#band-a').replaceChildren(...BAND_A.map(li(null))); $('#band-c').replaceChildren(...BAND_C.map(li(null)));
+  for (const [key, label] of RIGS) {
+    const cur = rigs[key], box = $(`#rig-${key}`);
+    const dwell = el('input', { type: 'number', min: '2', max: '300', step: '1', value: String(cur?.dwell || 20), title: 'Seconds on each channel while scanning', disabled: !rxWs || !cur, onchange: (e) => { if (cur?.mode) tune(key, cur.mode, +e.target.value); } });
+    box.replaceChildren(
+      el('div', { class: 'seg', role: 'group', 'aria-label': `${label} receive mode` }, RX_MODES.map(([v, name, tip]) => el('button', { type: 'button', class: cur?.mode === v ? 'on' : '', text: name, title: `${tip}${rxWs && cur ? '' : ` (${cur ? 'connect to the station helper on the local network' : `${label} not connected to the station helper`} to change)`}`, disabled: !rxWs || !cur, onclick: () => tune(key, v, +dwell.value || 20) }))),
+      el('label', { class: 'dwell' }, 'Scan dwell ', dwell, ' s'),
+      el('p', { class: 'small rig-now', text: cur ? `${label}: ${cur.modeName} · now on ${cur.channel}${cur.freq ? ` (${(cur.freq / 1e6).toFixed(cur.freq < 30e6 ? 4 : 3)} MHz)` : ''}` : `${label} not reporting.` }),
+      el('ul', { class: 'chans' }, rigChans(label).map(li(cur))));
+  }
   $('#rx-status').textContent = rxWs ? `Connected to the station receiver at ${S.rx}.` : rfFeedAt ? `Station receiver reporting through the relay (last ${new Date(rfFeedAt).toLocaleTimeString()}). Scan control works on the station's local network.` : 'No station receiver connected yet: internet AIS and weather work now; direct RF needs the station helper (see below).';
 }
-function tune(mode) {
+function tune(rig, mode, dwell = 20) {
   if (!rxWs) return;
-  S.rxMode = mode; save();
-  rxWs.send(JSON.stringify({ type: 'tune', mode, dwell: +$('#rx-dwell').value || 20 }));
+  rxWs.send(JSON.stringify({ type: 'tune', rig, mode, dwell }));
 }
-$('#rx-dwell').addEventListener('change', () => { if (rxStatus?.rx?.mode) tune(rxStatus.rx.mode); });
 function connectRx() {
   try { rxWs?.close(); } catch { /* ignore */ }
   rxWs = null; renderRx();

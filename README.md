@@ -10,6 +10,10 @@ Coast-watch receiver app for **Ocean City coastal station, 8PFX** (Barbados): vi
   - AIS scan (Ch 87B ⇄ 88B), or AIS 1 or AIS 2 on its own;
   - VHF DSC Ch 70, or AIS + DSC in turn;
   - MF/HF DSC (2187.5 / 4207.5 / 6312 / 8414.5 / 12577 / 16804.5 kHz).
+- **Band C, Kenwood TH-D74:** a second software receiver, tuned over its USB COM port, with its USB audio decoded the same way and the same modes.
+  - TH-D74 menus: **980 USB Function** = *COM+AF/IF Output*; **102 Detect Out** = *Detect* for AIS and VHF DSC (flat FM-detector audio, the best for 9600-baud AIS), or *Off (AF)* for HF DSC; **918 USB audio level** about 5; squelch open.
+  - Marine Monitor tunes Band B, which covers 0.1–524 MHz including HF USB.
+  - With both radios, put the **IC-9100 on AIS 1** and the **TH-D74 on AIS 2**, so both AIS channels are heard all the time.
 
 > **Receive only. Not for navigation.** Marine Monitor never transmits. AIS and internet data can be late, missing or wrong. Never use it instead of a watch, radar, or the official GMDSS equipment and services.
 
@@ -68,7 +72,7 @@ IC-9100 menu settings:
 - CI-V baud **19200**
 - USB audio output level about **50%**
 
-Use `--audio` to choose the sound device if the radio isn't the default one. Modes: `ais-scan`, `ais-a`, `ais-b`, `dsc70`, `ais-dsc`, `hf-dsc`.
+Use `--audio` to choose the sound device if the radio isn't the default one. For the TH-D74 add `--d74-port COM5 --d74-audio "TH-D74" --d74-mode ais-b`. Modes: `ais-scan`, `ais-a`, `ais-b`, `dsc70`, `ais-dsc`, `hf-dsc`.
 
 > The IC-9100's main receiver hears one frequency at a time, so AIS scan catches each AIS channel about half the time. FM audio filtering also limits AIS decoding (9600 baud). Busy waters need a dedicated dual-channel AIS receiver such as a dAISy or an RTL-SDR with AIS-catcher; those feed the same helper over UDP 10110. DSC (1200 and 100 baud) decodes well from the IC-9100.
 

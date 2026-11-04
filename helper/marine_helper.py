@@ -8,6 +8,8 @@ Runs at the coastal station on a PC or Raspberry Pi next to the receivers. It co
     at 4800 baud from its NMEA OUT wires (use a USB-to-RS422/NMEA adapter);
   * the Icom IC-9100 as a software receiver with --rig ic9100: Marine Monitor tunes it over CI-V and
     decodes its USB audio itself (AIS 1/2 scan or single channel, VHF DSC Ch 70, MF/HF DSC);
+  * the Kenwood TH-D74 the same way with --d74-port: tuned over its USB COM port, decoding its USB audio
+    (Menu 980 = COM+AF/IF Output, Menu 102 = Detect). With both radios each can hold one AIS channel;
   * decoded text from NAVTEX / Inmarsat-C EGC / 406 MHz decoders, appended to text files
     (--navtex-file, --egc-file, --epirb-file) by those programs;
 and sends it to:
@@ -19,7 +21,8 @@ It never transmits on any radio. Python 3.9+. Optional: `pip install websockets 
 Typical receiver chains (any one is enough to start):
   AIS (2 channels, one RTL-SDR):   AIS-catcher -d:0 -u 127.0.0.1 10110
   Band A, DSC Ch 70 (Uniden UM435):   --serial COM3 --baud 4800
-  Band B, Icom IC-9100 (USB cable):   --rig ic9100 --civ-port COM4 --audio "USB Audio CODEC" --mode ais-scan
+  Band B, Icom IC-9100 (USB cable):   --rig ic9100 --civ-port COM4 --audio "USB Audio CODEC" --mode ais-a
+  Band C, Kenwood TH-D74 (USB cable): --d74-port COM5 --d74-audio "TH-D74" --d74-mode ais-b
   NAVTEX 518 kHz:                  an HF SDR (RTL-SDR Blog V4 / SDRplay) + a NAVTEX decoder writing text to navtex.txt
   406 MHz EPIRB/PLB bursts:        RTL-SDR + a 406 decoder writing beacon hex IDs to epirb.txt
   Inmarsat-C EGC SafetyNET:        L-band antenna + LNA + SDR + an EGC decoder writing messages to egc.txt
@@ -35,7 +38,7 @@ class Hub:
         self.relay, self.feed_key = relay, feed_key
         self.lines, self.alerts = [], []
         self.bands = {}  # channel name -> {"live": bool, "count": n, "last": t}
-        self.rx = None   # SoftReceiver when an IC-9100 is attached
+        self.rigs = {}   # key -> SoftReceiver ('ic9100', 'thd74')
 
     def heard(self, band):
         b = self.bands.setdefault(band, {"live": False, "count": 0, "last": 0})
@@ -77,12 +80,14 @@ class Hub:
             await asyncio.sleep(10)
 
     def status(self):
-        return {"type": "status", "bands": self.bands, "rx": self.rx.status() if self.rx else None}
+        rigs = {k: r.status() for k, r in self.rigs.items()}
+        return {"type": "status", "bands": self.bands, "rigs": rigs, "rx": next(iter(rigs.values()), None)}
 
     async def command(self, msg):
         """From the app on the local network: change the IC-9100 scan plan. Receive-side only."""
-        if msg.get("type") == "tune" and self.rx:
-            try: await asyncio.to_thread(self.rx.set_mode, str(msg.get("mode")), msg.get("dwell"))
+        rx = self.rigs.get(str(msg.get("rig") or "ic9100")) or next(iter(self.rigs.values()), None)
+        if msg.get("type") == "tune" and rx:
+            try: await asyncio.to_thread(rx.set_mode, str(msg.get("mode")), msg.get("dwell"))
             except ValueError: return
             await self.broadcast(self.status())
 
@@ -92,7 +97,7 @@ class Hub:
             await asyncio.sleep(5)
             if not self.lines and not self.alerts and int(time.time()) % 60 > 5: continue
             st = self.status()
-            body = json.dumps({"lines": self.lines[:2000], "alerts": self.alerts[:200], "bands": st["bands"], "rx": st["rx"]}).encode()
+            body = json.dumps({"lines": self.lines[:2000], "alerts": self.alerts[:200], "bands": st["bands"], "rx": st["rx"], "rigs": st["rigs"]}).encode()
             self.lines, self.alerts = self.lines[2000:], self.alerts[200:]
             req = urllib.request.Request(self.relay.rstrip("/") + "/api/feed", data=body, method="POST",
                                          headers={"content-type": "application/json", "x-feed-key": self.feed_key})
@@ -154,6 +159,11 @@ async def main():
     ap.add_argument("--audio-channel", type=int, default=0, help="0 = left/main, 1 = right")
     ap.add_argument("--mode", default="ais-scan", help="ais-scan | ais-a | ais-b | dsc70 | ais-dsc | hf-dsc")
     ap.add_argument("--dwell", type=float, default=20, help="seconds on each channel when scanning")
+    ap.add_argument("--d74-port", help="Kenwood TH-D74 USB COM port, e.g. COM5 or /dev/ttyACM0 (enables the TH-D74)")
+    ap.add_argument("--d74-audio", help="sound device name/number of the TH-D74's USB audio")
+    ap.add_argument("--d74-band", default="B", choices=["A", "B"], help="TH-D74 band to use (B covers HF too)")
+    ap.add_argument("--d74-mode", default="ais-b", help="ais-scan | ais-a | ais-b | dsc70 | ais-dsc | hf-dsc")
+    ap.add_argument("--d74-dwell", type=float, default=20)
     a = ap.parse_args()
     hub = Hub(a.relay, a.feed_key)
     loop = asyncio.get_running_loop()
@@ -167,10 +177,21 @@ async def main():
         rig = Rig(a.civ_port, a.civ_baud, int(a.civ_addr, 0))
         if a.civ_port: rig.main_band()
         emit = lambda line, band, extra=None: asyncio.run_coroutine_threadsafe(hub.nmea(line, band, extra), loop)
-        hub.rx = SoftReceiver(emit, rig=rig, mode=a.mode, dwell=a.dwell)
+        hub.rigs["ic9100"] = SoftReceiver(emit, rig=rig, mode=a.mode, dwell=a.dwell, label="IC-9100", key="ic9100")
         dev = int(a.audio) if a.audio and a.audio.isdigit() else a.audio
-        threading.Thread(target=run_audio, args=(hub.rx, dev, a.audio_channel), daemon=True).start()
-        print(f"IC-9100 software receiver: {hub.rx.status()['modeName']}")
+        threading.Thread(target=run_audio, args=(hub.rigs["ic9100"], dev, a.audio_channel), daemon=True).start()
+        print(f"IC-9100 software receiver: {hub.rigs['ic9100'].status()['modeName']}")
+    if a.d74_port or a.d74_audio:
+        import threading
+        import kenwood_cat
+        from receiver import SoftReceiver, run_audio
+        d74 = kenwood_cat.Rig(a.d74_port, band=a.d74_band)
+        if a.d74_port: d74.main_band()
+        emit = lambda line, band, extra=None: asyncio.run_coroutine_threadsafe(hub.nmea(line, band, extra), loop)
+        hub.rigs["thd74"] = SoftReceiver(emit, rig=d74, mode=a.d74_mode, dwell=a.d74_dwell, label="TH-D74", key="thd74")
+        dev = int(a.d74_audio) if a.d74_audio and a.d74_audio.isdigit() else a.d74_audio
+        threading.Thread(target=run_audio, args=(hub.rigs["thd74"], dev, 0), daemon=True).start()
+        print(f"TH-D74 software receiver: {hub.rigs['thd74'].status()['modeName']}")
     if a.navtex_file: tasks.append(follow(a.navtex_file, lambda t: hub.alert("navtex", text=t) if "ZCZC" in t else asyncio.sleep(0), split_on="NNNN"))
     if a.egc_file: tasks.append(follow(a.egc_file, lambda t: hub.alert("egc", text=t.strip()) if t.strip() else asyncio.sleep(0)))
     async def epirb_line(t):

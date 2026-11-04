@@ -127,11 +127,8 @@
         <div class="bands">
           <div class="band"><h3>Band A · Uniden UM435 · DSC watch</h3><ul id="band-a" class="chans"></ul>
             <p class="muted small">The UM435 keeps a constant DSC watch on Ch 70 while you listen on any channel, and sends every call it receives to Marine Monitor (NMEA OUT, 4800 baud).</p></div>
-          <div class="band"><h3>Band B · Icom IC-9100 · software receiver</h3>
-            <div id="rx-modes" class="seg" role="group" aria-label="IC-9100 receive mode"></div>
-            <label class="dwell">Scan dwell <input id="rx-dwell" type="number" min="2" max="300" step="1" value="20" title="Seconds on each channel while scanning"> s</label>
-            <p id="rx-now" class="small"></p>
-            <ul id="band-b" class="chans"></ul></div>
+          <div class="band"><h3>Band B · Icom IC-9100 · software receiver</h3><div id="rig-ic9100"></div></div>
+          <div class="band"><h3>Band C · Kenwood TH-D74 · software receiver</h3><div id="rig-thd74"></div></div>
         </div>
       </div>
       <div class="card"><h2>Other receivers (optional)</h2><ul id="band-c" class="chans"></ul></div>
@@ -140,9 +137,10 @@
         <ol class="small">
           <li><strong>UM435 (Band A):</strong> NMEA OUT wires → USB-to-NMEA/RS-422 adapter → station PC. Program the station's MMSI in the UM435.</li>
           <li><strong>IC-9100 (Band B):</strong> one USB cable carries CI-V control and receive audio. Menu: CI-V USB Echo Back OFF, CI-V baud 19200, USB audio output level about 50%. Marine Monitor tunes the main receiver and decodes AIS and DSC from the audio in software.</li>
-          <li>Run <code>python helper/marine_helper.py --serial COM3 --baud 4800 --rig ic9100 --civ-port COM4 --mode ais-scan</code> and put its address in Settings → Station receiver. Add <code>--relay</code> and <code>--feed-key</code> so phones anywhere see the station.</li>
+          <li><strong>TH-D74 (Band C):</strong> micro-USB cable to the station PC. Menu 980 USB Function = <em>COM+AF/IF Output</em>, Menu 102 Detect Out = <em>Detect</em> (flat FM detector audio, best for AIS; use <em>Off (AF)</em> for HF DSC), Menu 918 USB audio level about 5, squelch open. Marine Monitor tunes Band B over the USB COM port.</li>
+          <li>Run <code>python helper/marine_helper.py --serial COM3 --baud 4800 --rig ic9100 --civ-port COM4 --mode ais-a --d74-port COM5 --d74-audio "TH-D74" --d74-mode ais-b</code> and put its address in Settings → Station receiver. Add <code>--relay</code> and <code>--feed-key</code> so phones anywhere see the station.</li>
         </ol>
-        <p class="muted small">The IC-9100's main receiver hears one frequency at a time, so "AIS scan" alternates Ch 87B and 88B (each heard about half the time). For both AIS channels all the time, add a dedicated AIS receiver later. Receive only: Marine Monitor never transmits.</p>
+        <p class="muted small">Each radio hears one frequency at a time. With both, put the IC-9100 on AIS 1 and the TH-D74 on AIS 2 so both AIS channels are heard all the time (the UM435 keeps the DSC watch). With one radio, "AIS scan" alternates Ch 87B and 88B. Receive only: Marine Monitor never transmits.</p>
       </div>
     </section>
 

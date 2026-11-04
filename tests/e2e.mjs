@@ -87,7 +87,9 @@ try {
   assert.match(await page.innerText('#call-log'), /waiting for acknowledgement/);
   await fetch(`${base}/api/feed`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-feed-key': 'f'.repeat(24) }, body: JSON.stringify({ alerts: [
     { kind: 'dsc', line: '$CDDSC,20,3140001110,00,00,26,900072,,,,B,*00', to: '003140001' },
-    { kind: 'dsc', line: '$CDDSC,14,3149990000,00,00,26,900006,,,,S,*00', to: '031400010' }], bands: { 'AIS 1 (Ch 87B)': { live: true, count: 12 }, 'DSC Ch 70 (UM435)': { live: true, count: 2 } }, rx: { mode: 'ais-scan', modeName: 'AIS scan (87B ⇄ 88B)', channel: 'AIS 1 (Ch 87B)', freq: 161975000 } }) });
+    { kind: 'dsc', line: '$CDDSC,14,3149990000,00,00,26,900006,,,,S,*00', to: '031400010' }], bands: { 'AIS 1 (Ch 87B)': { live: true, count: 12 }, 'DSC Ch 70 (UM435)': { live: true, count: 2 } }, rx: { rig: 'ic9100', mode: 'ais-a', modeName: 'AIS 1 only (Ch 87B)', channel: 'AIS 1 (Ch 87B)', freq: 161975000 },
+    rigs: { ic9100: { rig: 'ic9100', label: 'IC-9100', mode: 'ais-a', modeName: 'AIS 1 only (Ch 87B)', channel: 'AIS 1 (Ch 87B)', freq: 161975000, dwell: 20 },
+      thd74: { rig: 'thd74', label: 'TH-D74', mode: 'ais-b', modeName: 'AIS 2 only (Ch 88B)', channel: 'AIS 2 (Ch 88B)', freq: 162025000, dwell: 20 } } }) });
   await page.evaluate(() => document.querySelector('[data-tab=alerts]').click());
   await page.waitForFunction(() => /acknowledged ✓/.test(document.querySelector('#call-log').innerText), null, { timeout: 25000 });
   const al2 = await page.innerText('#alerts');
@@ -102,9 +104,10 @@ try {
   assert.match(await page.innerText('#obs'), /TBPB/);
   await shot('weather');
   await page.click('[data-tab=rx]');
-  assert.match(await page.innerText('#band-a'), /DSC Ch 70 \(UM435\)[\s\S]*live · 2/); assert.match(await page.innerText('#band-b'), /▶ AIS 1 \(Ch 87B\)[\s\S]*161\.975 MHz[\s\S]*live · 12[\s\S]*HF DSC 8414\.5 kHz/);
-  assert.match(await page.innerText('#band-c'), /406\.0–406\.1 MHz/); assert.match(await page.innerText('#rx-now'), /IC-9100: AIS scan .* now on AIS 1 \(Ch 87B\) \(161\.975 MHz\)/);
-  assert.equal(await page.isDisabled('#rx-modes button:has-text("AIS 2")'), true, 'scan control needs the local helper');
+  assert.match(await page.innerText('#band-a'), /DSC Ch 70 \(UM435\)[\s\S]*live · 2/); assert.match(await page.innerText('#rig-ic9100'), /▶ AIS 1 \(Ch 87B\)[\s\S]*161\.975 MHz[\s\S]*live · 12[\s\S]*HF DSC 8414\.5 kHz/);
+  assert.match(await page.innerText('#rig-thd74'), /TH-D74: AIS 2 only \(Ch 88B\) · now on AIS 2 \(Ch 88B\) \(162\.025 MHz\)[\s\S]*▶ AIS 2 \(Ch 88B\)[\s\S]*DSC Ch 70 \(TH-D74\)/);
+  assert.match(await page.innerText('#band-c'), /406\.0–406\.1 MHz/); assert.match(await page.innerText('#rig-ic9100'), /IC-9100: AIS 1 only \(Ch 87B\) · now on AIS 1 \(Ch 87B\) \(161\.975 MHz\)/);
+  assert.equal(await page.isDisabled('#rig-thd74 button:has-text("AIS scan")'), true, 'scan control needs the local helper');
   await shot('receiver');
   assert.equal((await page.evaluate(() => document.documentElement.scrollWidth)), 412, 'no sideways scrolling on a phone');
   assert.deepEqual(errors, []);

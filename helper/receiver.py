@@ -1,6 +1,5 @@
-"""Software receiver: tunes a CI-V radio (Icom IC-9100) through a channel plan and decodes its USB audio.
-
-Modes (Band B, the IC-9100's main receiver hears one frequency at a time):
+"""Software receiver: tunes a radio (Icom IC-9100 over CI-V, Kenwood TH-D74 over its USB COM port) through a
+channel plan and decodes its USB audio. Each radio hears one frequency at a time. Modes:
   ais-scan  AIS 1 and AIS 2 alternately (dwell seconds each)    ais-a / ais-b  one AIS channel only
   dsc70     VHF DSC Ch 70 (software decoder; the UM435 also watches Ch 70 as Band A)
   ais-dsc   AIS 1, AIS 2 and DSC Ch 70 in turn                   hf-dsc  MF/HF DSC distress frequencies in turn
@@ -23,15 +22,22 @@ class Chan:
 
 AIS1 = Chan('AIS 1 (Ch 87B)', 161_975_000, 161_975_000, 'FM', 'ais', 'A')
 AIS2 = Chan('AIS 2 (Ch 88B)', 162_025_000, 162_025_000, 'FM', 'ais', 'B')
-DSC70 = Chan('DSC Ch 70 (IC-9100)', 156_525_000, 156_525_000, 'FM', 'dsc-vhf')
 HFDSC = [Chan(f'HF DSC {k:g} kHz', int(k * 1000), int(k * 1000) - 1700, 'USB', 'dsc-hf') for k in (2187.5, 4207.5, 6312, 8414.5, 12577, 16804.5)]
-PLANS = {'ais-scan': [AIS1, AIS2], 'ais-a': [AIS1], 'ais-b': [AIS2], 'dsc70': [DSC70], 'ais-dsc': [AIS1, AIS2, DSC70], 'hf-dsc': HFDSC}
+
+
+def plans(label='IC-9100'):
+    dsc70 = Chan(f'DSC Ch 70 ({label})', 156_525_000, 156_525_000, 'FM', 'dsc-vhf')
+    return {'ais-scan': [AIS1, AIS2], 'ais-a': [AIS1], 'ais-b': [AIS2], 'dsc70': [dsc70], 'ais-dsc': [AIS1, AIS2, dsc70], 'hf-dsc': HFDSC}
+
+
+PLANS = plans()
 MODE_NAMES = {'ais-scan': 'AIS scan (87B ⇄ 88B)', 'ais-a': 'AIS 1 only (Ch 87B)', 'ais-b': 'AIS 2 only (Ch 88B)', 'dsc70': 'DSC Ch 70', 'ais-dsc': 'AIS 1 → AIS 2 → DSC 70', 'hf-dsc': 'MF/HF DSC scan'}
 
 
 class SoftReceiver:
-    def __init__(self, emit, rig=None, rate=48000, mode='ais-scan', dwell=20.0):
-        self.emit, self.rig, self.rate = emit, rig, rate
+    def __init__(self, emit, rig=None, rate=48000, mode='ais-scan', dwell=20.0, label='IC-9100', key='ic9100'):
+        self.emit, self.rig, self.rate, self.label, self.key = emit, rig, rate, label, key
+        self.plans = plans(label)
         self.dwell = dwell
         self.buf = np.zeros(0)
         self.lock = threading.Lock()
@@ -39,10 +45,10 @@ class SoftReceiver:
         self.set_mode(mode)
 
     def set_mode(self, mode, dwell=None):
-        if mode not in PLANS:
+        if mode not in self.plans:
             raise ValueError(f'unknown mode {mode}')
         with self.lock:
-            self.mode, self.plan, self.idx = mode, PLANS[mode], 0
+            self.mode, self.plan, self.idx = mode, self.plans[mode], 0
             if dwell:
                 self.dwell = max(2.0, float(dwell))
             self.buf = np.zeros(0)
@@ -58,7 +64,7 @@ class SoftReceiver:
             self.rig.tune(self.chan.dial, self.chan.mode)
 
     def status(self):
-        return {'mode': self.mode, 'modeName': MODE_NAMES[self.mode], 'channel': self.chan.name, 'freq': self.chan.freq, 'dwell': self.dwell, 'modes': MODE_NAMES}
+        return {'rig': self.key, 'label': self.label, 'mode': self.mode, 'modeName': MODE_NAMES[self.mode], 'channel': self.chan.name, 'freq': self.chan.freq, 'dwell': self.dwell, 'modes': MODE_NAMES}
 
     def tick(self):
         """Call regularly: steps to the next channel of a scan after `dwell` seconds."""
