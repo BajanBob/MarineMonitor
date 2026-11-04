@@ -1,7 +1,7 @@
 // Marine Monitor — coast-watch receiver display. Receive-only.
 import { gridToLatLon, gridBounds, latLonToGrid, bearing, distanceNm, destination, cpa, compass, fmtLat, fmtLon } from './lib/geo.js';
 import { AisDecoder, mmsiKind, mmsiCountry, mmsiDecode } from './lib/ais.js';
-import { parseDsc, parseNavtex, parseBeaconHex, buildDscCall } from './lib/gmdss.js';
+import { parseDsc, parseNavtex, parseBeaconHex, buildDscCall, dscArea } from './lib/gmdss.js';
 import { Radar } from './lib/radar.js';
 
 const $ = (s) => document.querySelector(s);
@@ -41,9 +41,9 @@ const station = () => (S.lat != null ? { lat: S.lat, lon: S.lon } : null);
 const api = (p) => `${(S.relay || '').replace(/\/$/, '')}${p}`;
 
 function applyFace() {
-  document.body.className = S.face === 'night' ? 'night' : 'day';
+  document.body.classList.toggle('night', S.face === 'night'); document.body.classList.toggle('day', S.face !== 'night');
   $('#face-day').classList.toggle('on', S.face !== 'night'); $('#face-night').classList.toggle('on', S.face === 'night');
-  document.querySelector('meta[name=theme-color]').setAttribute('content', S.face === 'night' ? '#000000' : '#06141f');
+  document.querySelector('meta[name=theme-color]').setAttribute('content', document.body.classList.contains('red-alert') ? '#c4122a' : S.face === 'night' ? '#000000' : '#06141f');
 }
 $('#face-day').addEventListener('click', () => { S.face = 'day'; save(); applyFace(); });
 $('#face-night').addEventListener('click', () => { S.face = 'night'; save(); applyFace(); });
@@ -191,7 +191,7 @@ async function loadAlerts() {
   renderAlerts();
 }
 function alertTitle(a) {
-  if (a.kind === 'dsc') return `DSC ${a.format && !/Distress/.test(a.format) ? `${a.format} · ` : ''}${a.category}${a.nature ? ` · ${a.nature}` : ''}`;
+  if (a.kind === 'dsc') return `DSC ${a.format || ''} · ${a.category}${a.nature ? ` · ${a.nature}` : ''}`;
   if (a.kind === 'ais') return `${a.device || 'AIS'} · ${a.text || ''}`;
   if (a.kind === 'navtex') return `NAVTEX ${a.code || a.station + a.number} · ${a.subject}`;
   if (a.kind === 'epirb') return `406 MHz beacon · ${a.type} · ${a.countryName}`;
@@ -199,6 +199,35 @@ function alertTitle(a) {
   return a.kind;
 }
 let alarmedIds = new Set(store.get('mm-alarmed', []));
+const acked = new Set(store.get('mm-acked', []));
+const alertKey = (a) => a.id || `${a.kind}|${a.mmsi || a.hex || ''}|${a.at}`;
+/** Every field of a DSC call, classified (ITU-R M.493). Returns [label, value, highlight]. */
+function dscRows(a, st) {
+  const pos = a.position;
+  const where = pos ? `${fmtLat(pos.lat)} ${fmtLon(pos.lon)}${st ? ` · ${Math.round(bearing(st, pos))}° T ${n1(distanceNm(st, pos))} NM from ${S.call}` : ''}` : 'not given';
+  const who = (m) => (m ? `${m}${dirName(m) ? ` (${dirName(m)})` : ''}${m === S.mmsi ? ` (${S.call}, this station)` : ''}` : '');
+  const area = a.area ? dscArea(a.area) : null;
+  const to = a.formatCode === '02' ? (area ? `All ships in the area ${area.text}` : 'All ships in a geographic area')
+    : a.formatCode === '14' ? `Group ${who(a.to) || '(group MMSI not given)'}`
+    : a.formatCode === '20' || a.formatCode === '23' ? `Individual: ${who(a.to) || 'this receiver'}`
+    : 'All ships / all stations';
+  const isDistress = a.level === 'distress';
+  const voice = a.channel ? `${a.channel} (switch after the DSC call)` : isDistress ? (a.commType && /SSB/.test(a.commType) ? 'SSB voice on the associated distress frequency' : 'Ch 16 (distress traffic, VHF)') : 'not given';
+  const rows = [
+    ['Call type', a.format || '', isDistress],
+    ['Addressed to', to],
+    ['Category', a.category, isDistress || a.level === 'urgency'],
+  ];
+  if (isDistress) rows.push(['Nature of distress', a.undesignated ? 'Undesignated' : `${a.nature || 'not given'} (designated)`, true]);
+  if (a.relay || a.distressAck) rows.push([a.relay ? 'Relayed by' : 'Acknowledged by', who(a.relayBy)], ['Vessel in distress', who(a.distressMmsi), true]);
+  else rows.push(['From', `${who(a.mmsi)}${a.country ? ` · ${a.country}` : ''}`]);
+  rows.push(['Position', where], ['Time', a.time || 'not given'], ['Voice channel', voice, isDistress]);
+  if (a.commType) rows.push(['Subsequent communication', a.commType]);
+  if (a.telecommand && !a.relay && !a.distressAck) rows.push(['Telecommand', a.telecommand]);
+  if (a.ack) rows.push(['Acknowledgement', a.ack]);
+  rows.push(['Heard', `${a.src === 'rf' ? 'direct RF' : 'via relay'}${a.at ? ` · ${new Date(a.at).toLocaleString()}` : ''}${a.count > 1 ? ` · ×${a.count}` : ''}`]);
+  return rows;
+}
 function renderAlerts() {
   const dscOk = (a, local) => a.kind !== 'dsc' || S.dscSrc === 'both' || (S.dscSrc === 'rf') === local;
   const all = [...localAlerts.filter((a) => dscOk(a, true)), ...alerts.filter((a) => dscOk(a, false))].sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 150);
@@ -207,23 +236,41 @@ function renderAlerts() {
   $('#alerts').replaceChildren(...(all.length ? all.map((a) => {
     const pos = a.position || (a.lat != null ? { lat: a.lat, lon: a.lon } : null);
     const where = pos ? `${fmtLat(pos.lat)} ${fmtLon(pos.lon)}${st ? ` · ${Math.round(bearing(st, pos))}° T ${n1(distanceNm(st, pos))} NM from ${S.call}` : ''}` : '';
+    if (a.kind === 'dsc') return el('li', { class: a.level },
+      el('div', {}, el('span', { class: 'lv', text: `${LEVEL[a.level] || a.level} ` }), document.createTextNode(alertTitle(a))),
+      forMe(a) ? el('div', { class: 'forme', text: `▶ Call for ${forMe(a)}` }) : null,
+      el('dl', { class: 'dsc' }, dscRows(a, st).flatMap(([k, v, hot]) => [el('dt', { text: k }), el('dd', { class: hot ? 'hot' : '', text: v })])));
     return el('li', { class: a.level },
       el('div', {}, el('span', { class: 'lv', text: `${LEVEL[a.level] || a.level} ` }), document.createTextNode(alertTitle(a))),
       forMe(a) ? el('div', { class: 'forme', text: `▶ Call for ${forMe(a)}` }) : null,
       el('div', { class: 'meta', text: [a.mmsi ? `From MMSI ${a.mmsi}${a.country ? ` (${a.country})` : ''}` : '', a.to ? `to ${a.to}${dirName(a.to) ? ` (${dirName(a.to)})` : ''}` : '', a.channel || '', a.telecommand || '', a.ack || '', a.hex ? `Beacon ${a.hex}` : '', where, a.time || '', a.src === 'rf' ? 'direct RF' : a.src === 'internet' ? 'internet AIS' : '', a.at ? new Date(a.at).toLocaleString() : '', a.count > 1 ? `×${a.count}` : ''].filter(Boolean).join(' · ') }),
       a.body ? el('pre', { text: a.body }) : null);
   }) : [el('li', { class: 'muted', text: 'No alerts heard. Distress, urgency and safety calls from DSC, AIS-SART/MOB/EPIRB, NAVTEX, 406 MHz beacons and SafetyNET appear here.' })]));
-  const live = all.filter((a) => a.level === 'distress' && Date.now() - (a.last || a.at || 0) < 2 * 3600e3);
+  const recent = (a) => Date.now() - (a.last || a.at || 0) < 2 * 3600e3;
+  const live = all.filter((a) => a.level === 'distress' && recent(a));
   const badge = $('#alert-count'); badge.hidden = !live.length; badge.textContent = String(live.length);
+  // Red faceplate: DSC distress / urgency, and DSC calls for this station's MMSI or its groups, until acknowledged.
+  const red = all.filter((a) => a.kind === 'dsc' && recent(a) && (a.level === 'distress' || a.level === 'urgency' || forMe(a)) && !acked.has(alertKey(a)));
+  const loud = [...red, ...live.filter((a) => !acked.has(alertKey(a)) && !red.includes(a))];
+  document.body.classList.toggle('red-alert', red.length > 0); applyFace();
   const banner = $('#distress');
-  banner.hidden = !live.length;
-  if (live.length) banner.textContent = `⚠ DISTRESS: ${alertTitle(live[0])}${live[0].mmsi ? ` · MMSI ${live[0].mmsi}` : ''} — see GMDSS tab`;
+  banner.hidden = !loud.length;
+  if (loud.length) {
+    const a = loud[0];
+    $('#distress-text').textContent = `⚠ ${forMe(a) && a.level !== 'distress' ? `DSC CALL FOR ${forMe(a).toUpperCase()}` : LEVEL[a.level] || 'ALERT'}: ${alertTitle(a)}${a.mmsi ? ` · MMSI ${a.mmsi}` : ''}${loud.length > 1 ? ` (+${loud.length - 1} more)` : ''} — see GMDSS tab`;
+    banner.dataset.ids = JSON.stringify(loud.map(alertKey));
+  }
   const fresh = live.filter((a) => a.id && !alarmedIds.has(a.id));
   if (fresh.length && S.alarm) alarm();
   for (const a of fresh) alarmedIds.add(a.id);
   store.set('mm-alarmed', [...alarmedIds].slice(-300));
 }
-$('#distress').addEventListener('click', () => showTab('alerts'));
+$('#distress-text').addEventListener('click', () => showTab('alerts'));
+$('#distress-ack').addEventListener('click', (e) => {
+  e.stopPropagation();
+  for (const id of JSON.parse($('#distress').dataset.ids || '[]')) acked.add(id);
+  store.set('mm-acked', [...acked].slice(-500)); renderAlerts(); toast('Acknowledged: the call stays listed in the GMDSS tab');
+});
 function alarm() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -302,9 +349,9 @@ function renderRx() {
   $('#band-a').replaceChildren(...BAND_A.map(li(null))); $('#band-c').replaceChildren(...BAND_C.map(li(null)));
   for (const [key, label] of RIGS) {
     const cur = rigs[key], box = $(`#rig-${key}`);
-    const dwell = el('input', { type: 'number', min: '2', max: '300', step: '1', value: String(cur?.dwell || 20), title: 'Seconds on each channel while scanning', disabled: !rxWs || !cur, onchange: (e) => { if (cur?.mode) tune(key, cur.mode, +e.target.value); } });
+    const dwell = el('input', { type: 'number', min: '2', max: '300', step: '1', value: String(cur?.dwell || S.radios[key].dwell || 20), title: 'Seconds on each channel while scanning', onchange: (e) => tune(key, cur?.mode || S.radios[key].mode, +e.target.value) });
     box.replaceChildren(
-      el('div', { class: 'seg', role: 'group', 'aria-label': `${label} receive mode` }, RX_MODES.map(([v, name, tip]) => el('button', { type: 'button', class: cur?.mode === v ? 'on' : '', text: name, title: `${tip}${rxWs && cur ? '' : ` (${cur ? 'connect to the station helper on the local network' : `${label} not connected to the station helper`} to change)`}`, disabled: !rxWs || !cur, onclick: () => tune(key, v, +dwell.value || 20) }))),
+      el('div', { class: 'seg', role: 'group', 'aria-label': `${label} receive mode` }, RX_MODES.map(([v, name, tip]) => el('button', { type: 'button', class: (cur?.mode || S.radios[key].mode) === v ? 'on' : '', text: name, title: `${tip}${rxWs ? '' : ' (saved here; sent to the station when it is connected)'}`, onclick: () => tune(key, v, +dwell.value || 20) }))),
       el('label', { class: 'dwell' }, 'Scan dwell ', dwell, ' s'),
       el('p', { class: 'small rig-now', text: cur ? `${label}: ${cur.modeName} · now on ${cur.channel}${cur.freq ? ` (${(cur.freq / 1e6).toFixed(cur.freq < 30e6 ? 4 : 3)} MHz)` : ''}` : `${label} not reporting.` }),
       el('ul', { class: 'chans' }, rigChans(label).map(li(cur))));
@@ -325,24 +372,92 @@ function renderRx() {
 }
 $('#netcheck-run').addEventListener('click', () => { if (rxWs) { rxWs.send(JSON.stringify({ type: 'netcheck' })); toast('Checking the station network…'); } });
 function tune(rig, mode, dwell = 20) {
-  if (!rxWs) return;
-  rxWs.send(JSON.stringify({ type: 'tune', rig, mode, dwell }));
+  Object.assign(S.radios[rig], { mode, dwell: dwell || S.radios[rig].dwell }); save(); renderRadios();
+  if (!$('#radios-cmdline').hidden) showCmd();
+  if (rxWs) rxWs.send(JSON.stringify({ type: 'tune', rig, mode, dwell }));
+  else toast('Saved. It is sent to the station when the app is connected to it.');
+  renderRx();
 }
+
+// ---------------------------------------------------------------- radio connections (CAT control, ports, audio)
+const RADIO_DEFAULTS = {
+  um435: { enabled: false, port: '', baud: 4800 },
+  ic9100: { enabled: false, port: '', baud: 19200, addr: '0x7C', audio: '', channel: 0, mode: 'ais-a', dwell: 20 },
+  thd74: { enabled: false, port: '', baud: 9600, band: 'B', audio: '', channel: 0, mode: 'ais-b', dwell: 20 },
+};
+S.radios = Object.fromEntries(Object.entries(RADIO_DEFAULTS).map(([k, v]) => [k, { ...v, ...(S.radios?.[k] || {}) }]));
+const RADIO_INFO = {
+  um435: ['Uniden UM435 · Band A · DSC watch', 'NMEA OUT wires → USB-NMEA (RS-422) adapter. Usually 4800 baud.'],
+  ic9100: ['Icom IC-9100 · Band B · CI-V (CAT) + USB audio', 'One USB cable. Menu: CI-V USB Echo Back OFF, CI-V baud 19200, address 7C.'],
+  thd74: ['Kenwood TH-D74 · Band C · USB COM (CAT) + USB audio', 'Micro-USB. Menu 980 = COM+AF/IF Output, Menu 102 = Detect, 9600 baud.'],
+};
+let radiosDirty = false, stationInfo = null;
+function renderRadios() {
+  const r = S.radios;
+  const field = (key, name, label, input, tip) => el('label', { title: tip }, label, input);
+  const bind = (key, name, conv = (v) => v) => (e) => { r[key][name] = e.target.type === 'checkbox' ? e.target.checked : conv(e.target.value); radiosDirty = true; save(); if (!$('#radios-cmdline').hidden) showCmd(); };
+  const sel = (key, name, opts) => el('select', { onchange: bind(key, name, (v) => (/^\d+(\.\d+)?$/.test(v) ? +v : v)) }, opts.map(([v, t]) => { const o = el('option', { value: String(v), text: t }); if (String(r[key][name]) === String(v)) o.selected = true; return o; }));
+  const txt = (key, name, list, ph) => el('input', { value: String(r[key][name] ?? ''), list, placeholder: ph, oninput: bind(key, name) });
+  const bauds = [1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200].map((b) => [b, String(b)]);
+  const modes = RX_MODES.map(([v, n, t]) => [v, `${n} — ${t}`]);
+  $('#radios').replaceChildren(...Object.keys(RADIO_DEFAULTS).map((key) => {
+    const c = r[key], [title, hint] = RADIO_INFO[key];
+    const on = el('input', { type: 'checkbox', onchange: bind(key, 'enabled') }); on.checked = !!c.enabled;
+    const cols = [field(key, 'port', key === 'um435' ? 'Serial port' : 'Control (CAT) port', txt(key, 'port', 'port-list', key === 'thd74' ? 'COM5 or /dev/ttyACM0' : key === 'ic9100' ? 'COM4 or /dev/ttyUSB1' : 'COM3 or /dev/ttyUSB0'), 'The serial / USB COM port of this radio on the station PC or Pi'),
+      field(key, 'baud', 'Baud rate', sel(key, 'baud', bauds), 'Must match the radio\'s setting')];
+    if (key === 'ic9100') cols.push(field(key, 'addr', 'CI-V address', txt(key, 'addr', null, '0x7C'), 'IC-9100 default 0x7C'));
+    if (key === 'thd74') cols.push(field(key, 'band', 'Band', sel(key, 'band', [['B', 'B (0.1–524 MHz, HF too)'], ['A', 'A (VHF/UHF)']]), 'TH-D74 band Marine Monitor tunes'));
+    if (key !== 'um435') cols.push(
+      field(key, 'audio', 'Audio input (sound card)', txt(key, 'audio', 'audio-list', key === 'thd74' ? 'TH-D74 or USB Audio Device' : 'USB Audio CODEC'), 'The radio\'s USB audio, or the Plugable adapter'),
+      field(key, 'channel', 'Audio channel', sel(key, 'channel', [[0, 'Left / main'], [1, 'Right / sub']]), 'Which channel of the sound card carries the receiver'),
+      field(key, 'mode', 'Receive mode', sel(key, 'mode', modes), 'What this radio listens to'),
+      field(key, 'dwell', 'Scan dwell (s)', el('input', { type: 'number', min: '2', max: '300', value: String(c.dwell), oninput: bind(key, 'dwell', Number) }), 'Seconds on each channel when scanning'));
+    return el('fieldset', { class: 'radio' }, el('legend', { text: title }), el('label', { class: 'check', title: 'Use this radio' }, on, ' Connected and in use'), el('div', { class: 'cols' }, cols), el('p', { class: 'muted small', text: hint }));
+  }));
+  $('#radios-apply').disabled = !rxWs; $('#radios-rescan').disabled = !rxWs;
+  $('#port-list').replaceChildren(...(stationInfo?.ports || []).map((p) => el('option', { value: p.device, text: p.description })));
+  $('#audio-list').replaceChildren(...(stationInfo?.audio || []).map((d) => el('option', { value: d.name, text: `${d.inputs} input${d.inputs > 1 ? 's' : ''}` })));
+}
+function stationCommand(r) {
+  const q = (v) => (/[\s"']/.test(String(v)) ? `"${String(v).replace(/"/g, '\\"')}"` : String(v));
+  const a = ['python', 'helper/marine_helper.py'];
+  if (r.um435.enabled && r.um435.port) a.push('--serial', q(r.um435.port), '--baud', r.um435.baud);
+  const i = r.ic9100;
+  if (i.enabled) a.push('--rig', 'ic9100', ...(i.port ? ['--civ-port', q(i.port), '--civ-baud', i.baud, '--civ-addr', i.addr] : []), ...(i.audio ? ['--audio', q(i.audio)] : []), '--audio-channel', i.channel, '--mode', i.mode, '--dwell', i.dwell);
+  const d = r.thd74;
+  if (d.enabled && (d.port || d.audio)) a.push(...(d.port ? ['--d74-port', q(d.port), '--d74-baud', d.baud] : []), ...(d.audio ? ['--d74-audio', q(d.audio)] : []), '--d74-audio-channel', d.channel, '--d74-band', d.band, '--d74-mode', d.mode, '--d74-dwell', d.dwell);
+  a.push('--relay', location.origin.startsWith('http') && hosted ? location.origin : 'https://marine-monitor-16qf.onrender.com', '--feed-key', 'YOUR-FEED-KEY');
+  return a.join(' ');
+}
+function showCmd() { const p = $('#radios-cmdline'); p.textContent = stationCommand(S.radios); p.hidden = false; }
+$('#radios-cmd').addEventListener('click', showCmd);
+$('#radios-rescan').addEventListener('click', () => { if (rxWs) { rxWs.send(JSON.stringify({ type: 'rescan' })); toast('Looking for ports and sound cards…'); } });
+$('#radios-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (!rxWs) { toast('Not connected to the station: use "Show command line", or set Settings → Station receiver'); return; }
+  rxWs.send(JSON.stringify({ type: 'config', radios: S.radios })); radiosDirty = false;
+  $('#radios-msg').textContent = 'Sent to the station: it reconnects the radios and saves the settings.'; toast('Radio settings sent to the station');
+});
+renderRadios();
 function connectRx() {
   try { rxWs?.close(); } catch { /* ignore */ }
   rxWs = null; renderRx();
   if (!/^wss?:\/\//.test(S.rx || '')) return;
   let ws; try { ws = new WebSocket(S.rx); } catch { toast('Receiver address isn’t valid'); return; }
-  ws.onopen = () => { rxWs = ws; renderRx(); toast('Station receiver connected'); };
-  ws.onclose = () => { if (rxWs === ws) { rxWs = null; renderRx(); setTimeout(connectRx, 10e3); } };
+  ws.onopen = () => { rxWs = ws; renderRx(); renderRadios(); toast('Station receiver connected'); };
+  ws.onclose = () => { if (rxWs === ws) { rxWs = null; renderRx(); renderRadios(); setTimeout(connectRx, 10e3); } };
   ws.onmessage = (e) => {
     let m; try { m = JSON.parse(e.data); } catch { return; }
-    if (m.type === 'status') { rxStatus = m; renderRx(); return; }
+    if (m.type === 'status') {
+      rxStatus = m;
+      if (m.station) { stationInfo = m.station; if (!radiosDirty && m.station.config) { for (const k of Object.keys(RADIO_DEFAULTS)) S.radios[k] = { ...RADIO_DEFAULTS[k], ...m.station.config[k] }; save(); } renderRadios(); }
+      renderRx(); return;
+    }
     if (m.type === 'nmea') {
       const a = decoder.push(m.line);
       if (a?.mmsi && a.lat != null) { localRf.set(a.mmsi, { ...(localRf.get(a.mmsi) || {}), ...a, age: 0 }); refreshTargets(); }
       else if (a?.mmsi) { const o = localRf.get(a.mmsi); if (o) Object.assign(o, a); }
-      const d = parseDsc(m.line); if (d) { localAlerts.unshift({ ...d, to: m.to || null, at: Date.now(), id: `l${Date.now()}${Math.random()}`, src: 'rf' }); renderAlerts(); }
+      const d = parseDsc(m.line); if (d) { localAlerts.unshift({ ...d, to: m.to || null, area: m.area || null, at: Date.now(), id: `l${Date.now()}${Math.random()}`, src: 'rf' }); renderAlerts(); }
       if (a?.distress) { localAlerts.unshift({ kind: 'ais', level: 'distress', mmsi: String(a.mmsi), device: a.kind, text: a.safetyText || `${a.kind} active`, lat: a.lat, lon: a.lon, at: Date.now(), id: `l${a.mmsi}`, src: 'rf' }); renderAlerts(); }
     }
     if (m.type === 'alert') {

@@ -21,7 +21,7 @@ def fo_with_freq(fo_reply, hz):
 
 class Rig:
     """Minimal TH-D74 control. Rig(None) is a dry run that records the commands it would send."""
-    def __init__(self, port=None, baud=9600, band='B'):
+    def __init__(self, port=None, baud=9600, band='B'):  # noqa: D107
         self.b = '1' if str(band).upper() in ('B', '1') else '0'
         self.ser, self.sent = None, []
         self.fake_fo = f'FO {self.b},0144000000,0,0,0,0,0,0,0,0,0,08,08,000,0,0000000,0'
@@ -46,3 +46,8 @@ class Rig:
         fo = self.cmd(f'FO {self.b}')
         self.cmd(fo_with_freq(fo, hz))
         self.cmd(f'MD {self.b},{MODES[mode]}')
+
+    def close(self):
+        if self.ser:
+            try: self.ser.close()
+            finally: self.ser = None

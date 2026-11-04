@@ -39,3 +39,8 @@ class Rig:
         self._send(0x05, bcd_freq(hz))
         self._send(0x06, bytes([MODES[mode], 0x01]))
         self._send(0x1A, bytes([0x06, 0x01 if data_mode else 0x00, 0x01 if data_mode else 0x00]))
+
+    def close(self):
+        if self.ser:
+            try: self.ser.close()
+            finally: self.ser = None

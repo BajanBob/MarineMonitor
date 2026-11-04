@@ -111,22 +111,23 @@ class SoftReceiver:
         else:
             for call in mmdsp.decode_dsc(a, self.rate, mmdsp.VHF if c.kind == 'dsc-vhf' else mmdsp.HF):
                 if self._new(call['nmea']):
-                    self.emit(call['nmea'], c.name, {'to': call.get('to'), 'freq': c.freq})
+                    self.emit(call['nmea'], c.name, {'to': call.get('to'), 'area': call.get('area'), 'freq': c.freq})
 
 
-def run_audio(rx, device=None, channel=0):
-    """Read the radio's USB audio (needs `pip install sounddevice`) and feed the receiver forever.
+def run_audio(rx, device=None, channel=0, stop=None):
+    """Read the radio's USB audio (needs `pip install sounddevice`) and feed the receiver until `stop` is set.
     If the sound card is missing or unplugged, keep retrying every 10 s."""
+    stop = stop or threading.Event()
     def cb(indata, frames, t, status):
         rx.feed(indata[:, channel].copy())
-    while True:
+    while not stop.is_set():
         try:
             import sounddevice as sd  # needs the PortAudio library (Pi: libportaudio2)
             with sd.InputStream(device=device, channels=channel + 1, samplerate=rx.rate, blocksize=4800, callback=cb):
                 print(f"{rx.label} audio connected: {device or 'default sound card'}")
-                while True:
+                while not stop.is_set():
                     time.sleep(0.5)
                     rx.tick()
         except Exception as e:  # noqa: BLE001 (PortAudio raises several types)
             print(f"{rx.label} audio ({device or 'default'}): {e} (retrying in 10 s)")
-            time.sleep(10)
+            stop.wait(10)

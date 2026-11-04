@@ -26,6 +26,9 @@ Use a **separate Pi** from the vesseltracker.com Raspberry Pi, and leave theirs 
 
 Run `/opt/marine-monitor/list-devices.sh` to see the real port and sound-card names. Use the `/dev/serial/by-id/...` names, which stay the same when cables are re-plugged.
 
+## Changing radios later
+Use the app: **Receiver → Radio connections**. Set the control (CAT) port, baud rate, CI-V address, band, sound card, mode and dwell, then press **Apply to station**. The Pi reconnects the radios and saves the settings in `/opt/marine-monitor/helper/station.json`. **Rescan ports** lists the ports and sound cards the Pi can see.
+
 ## Useful commands
 - Live log: `journalctl -u marine-monitor -f`
 - Restart after changing settings: `sudo systemctl restart marine-monitor`

@@ -53,15 +53,21 @@ try {
   assert.match(await page.innerText('#ais-status'), /direct RF only/);
   await page.click('#ais-src button:has-text("Both")');
   await page.waitForFunction(() => /ISLAND TRADER/.test(document.querySelector('#tlist').innerText));
-  await page.click('#face-night'); assert.equal(await page.getAttribute('body', 'class'), 'night'); await shot('radar-night');
+  // Red faceplate: a DSC distress is live, so the faceplate is red until acknowledged.
+  assert.match(await page.getAttribute('body', 'class'), /red-alert/); assert.match(await page.innerText('#distress'), /DISTRESS: DSC Distress alert · Distress \(Mayday\) · Sinking/);
+  await shot('red-alert');
+  await page.click('#distress-ack');
+  await page.waitForFunction(() => !document.body.classList.contains('red-alert'));
+  await page.click('#face-night'); assert.match(await page.getAttribute('body', 'class'), /\bnight\b/); await shot('radar-night');
   await page.click('#face-day');
   await page.click('[data-tab=map]'); await page.waitForSelector('.leaflet-marker-icon');
   assert.ok(await page.$('.leaflet-overlay-pane path'), 'watch area drawn'); await shot('map');
   await page.click('[data-tab=alerts]');
   await page.waitForFunction(() => /DISTRESS/.test(document.querySelector('#alerts').innerText));
   const al = await page.innerText('#alerts');
-  assert.match(al, /DSC Distress \(Mayday\) · Sinking/); assert.match(al, /NAVTEX JA42/); assert.match(al, /° T [\d.]+ NM from 8PFX/);
-  assert.equal(await page.isVisible('#distress'), true, 'distress banner shown');
+  assert.match(al, /DSC Distress alert · Distress \(Mayday\) · Sinking/);
+  assert.match(al, /Call type\s+Distress alert[\s\S]*Addressed to\s+All ships \/ all stations[\s\S]*Category\s+Distress \(Mayday\)[\s\S]*Nature of distress\s+Sinking \(designated\)[\s\S]*From\s+314123456[\s\S]*Position\s+13°05[\s\S]*Time\s+14:23 UTC[\s\S]*Voice channel\s+Ch 16 \(distress traffic, VHF\)/); assert.match(al, /NAVTEX JA42/); assert.match(al, /° T [\d.]+ NM from 8PFX/);
+  assert.equal(await page.isVisible('#distress'), false, 'acknowledged distress no longer shouts');
   await page.waitForFunction(() => /NAVAREA IV 812\/2026/.test(document.querySelector('#msi').innerText));
   // DSC source: "RF" = local receiver only, so relay-reported DSC disappears
   await page.click('#dsc-src button:has-text("RF")');
@@ -87,14 +93,22 @@ try {
   assert.match(await page.innerText('#call-log'), /waiting for acknowledgement/);
   await fetch(`${base}/api/feed`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-feed-key': 'f'.repeat(24) }, body: JSON.stringify({ alerts: [
     { kind: 'dsc', line: '$CDDSC,20,3140001110,00,00,26,900072,,,,B,*00', to: '003140001' },
-    { kind: 'dsc', line: '$CDDSC,14,3149990000,00,00,26,900006,,,,S,*00', to: '031400010' }], bands: { 'AIS 1 (Ch 87B)': { live: true, count: 12 }, 'DSC Ch 70 (UM435)': { live: true, count: 2 } }, rx: { rig: 'ic9100', mode: 'ais-a', modeName: 'AIS 1 only (Ch 87B)', channel: 'AIS 1 (Ch 87B)', freq: 161975000 },
+    { kind: 'dsc', line: '$CDDSC,14,3149990000,00,00,26,900006,,,,S,*00', to: '031400010' },
+    { kind: 'dsc', line: '$CDDSC,02,3141111110,08,00,26,900016,,,,S,*00', area: '1150630203' },
+    { kind: 'dsc', line: '$CDDSC,16,0031400020,12,12,00,1130505936,1501,3149999990,07,S,*00' },
+    { kind: 'dsc', line: '$CDDSC,12,3147777770,12,07,00,1130505936,1502,,,S,*00' }], bands: { 'AIS 1 (Ch 87B)': { live: true, count: 12 }, 'DSC Ch 70 (UM435)': { live: true, count: 2 } }, rx: { rig: 'ic9100', mode: 'ais-a', modeName: 'AIS 1 only (Ch 87B)', channel: 'AIS 1 (Ch 87B)', freq: 161975000 },
     forwards: [{ name: 'vesseltracker', host: '203.0.113.5', port: 5321, sent: 42, last: Date.now(), error: null }], net: { at: Date.now(), ok: false, checks: [{ name: 'vesseltracker tunnel 1', target: '83.220.137.136:22 TCP', ok: true, ms: 140, detail: 'SSH-2.0-OpenSSH' }, { name: 'vesseltracker tunnel 2', target: '85.10.199.209:22 TCP', ok: false, ms: null, detail: 'timed out', fix: 'Allow outbound TCP 22 to this address in the router firewall' }, { name: 'Time sync (NTP)', target: 'pool.ntp.org:123 UDP', ok: true, ms: 40, detail: 'clock offset +0.1 s' }] },
     rigs: { ic9100: { rig: 'ic9100', label: 'IC-9100', mode: 'ais-a', modeName: 'AIS 1 only (Ch 87B)', channel: 'AIS 1 (Ch 87B)', freq: 161975000, dwell: 20 },
       thd74: { rig: 'thd74', label: 'TH-D74', mode: 'ais-b', modeName: 'AIS 2 only (Ch 88B)', channel: 'AIS 2 (Ch 88B)', freq: 162025000, dwell: 20 } } }) });
   await page.evaluate(() => document.querySelector('[data-tab=alerts]').click());
   await page.waitForFunction(() => /acknowledged ✓/.test(document.querySelector('#call-log').innerText), null, { timeout: 25000 });
   const al2 = await page.innerText('#alerts');
-  assert.match(al2, /Call for 8PFX \(this station\)/); assert.match(al2, /Call for your group Oistins fleet/); assert.match(al2, /Ch 72/);
+  assert.match(al2, /Call for 8PFX \(this station\)/);
+  assert.match(al2, /Geographic area · Safety \(Sécurité\)[\s\S]*Addressed to\s+All ships in the area 15°N 063°W, 2° south × 3° east[\s\S]*Voice channel\s+Ch 16 \(switch after the DSC call\)/);
+  assert.match(al2, /Distress relay[\s\S]*Nature of distress\s+Undesignated[\s\S]*Relayed by\s+003140002[\s\S]*Vessel in distress\s+314999999/);
+  assert.match(al2, /Group: |Addressed to\s+Group 031400010 \(Oistins fleet\)/);
+  assert.equal(await page.evaluate(() => document.body.classList.contains('red-alert')), true, 'new distress and calls for us turn the faceplate red again');
+  await page.click('#distress-ack'); await page.waitForFunction(() => !document.body.classList.contains('red-alert')); assert.match(al2, /Call for your group Oistins fleet/); assert.match(al2, /Ch 72/);
   await page.click('[data-tab=mmsi]'); await page.click('#call-type button:has-text("Group")'); await page.fill('#call-to', '031400010'); await page.click('#call-form button[type=submit]');
   assert.match(await page.innerText('#call-out'), /114 114 \| to 03 14 00 01 00 .*EOS 127/);
   await shot('mmsi');
@@ -108,7 +122,21 @@ try {
   assert.match(await page.innerText('#band-a'), /DSC Ch 70 \(UM435\)[\s\S]*live · 2/); assert.match(await page.innerText('#rig-ic9100'), /▶ AIS 1 \(Ch 87B\)[\s\S]*161\.975 MHz[\s\S]*live · 12[\s\S]*HF DSC 8414\.5 kHz/);
   assert.match(await page.innerText('#rig-thd74'), /TH-D74: AIS 2 only \(Ch 88B\) · now on AIS 2 \(Ch 88B\) \(162\.025 MHz\)[\s\S]*▶ AIS 2 \(Ch 88B\)[\s\S]*DSC Ch 70 \(TH-D74\)/);
   assert.match(await page.innerText('#band-c'), /406\.0–406\.1 MHz/); assert.match(await page.innerText('#rig-ic9100'), /IC-9100: AIS 1 only \(Ch 87B\) · now on AIS 1 \(Ch 87B\) \(161\.975 MHz\)/);
-  assert.equal(await page.isDisabled('#rig-thd74 button:has-text("AIS scan")'), true, 'scan control needs the local helper');
+  // Radio connections: editable without the station; command line generated from the settings
+  await page.check('#radios fieldset:nth-of-type(2) input[type=checkbox]');
+  await page.fill('#radios fieldset:nth-of-type(2) label:has-text("Control (CAT) port") input', 'COM4');
+  await page.fill('#radios fieldset:nth-of-type(2) label:has-text("Audio input") input', 'USB Audio CODEC');
+  await page.check('#radios fieldset:nth-of-type(3) input[type=checkbox]');
+  await page.fill('#radios fieldset:nth-of-type(3) label:has-text("Control (CAT) port") input', 'COM5');
+  await page.selectOption('#radios fieldset:nth-of-type(3) label:has-text("Band") select', 'A');
+  await page.check('#radios fieldset:nth-of-type(1) input[type=checkbox]');
+  await page.fill('#radios fieldset:nth-of-type(1) label:has-text("Serial port") input', 'COM3');
+  await page.click('#radios-cmd');
+  const cmd = await page.innerText('#radios-cmdline');
+  assert.match(cmd, /--serial COM3 --baud 4800 --rig ic9100 --civ-port COM4 --civ-baud 19200 --civ-addr 0x7C --audio "USB Audio CODEC" --audio-channel 0 --mode ais-a --dwell 20 --d74-port COM5 --d74-baud 9600 .*--d74-band A --d74-mode ais-b/);
+  assert.equal(await page.isDisabled('#radios-apply'), true, 'Apply needs the station connection');
+  await page.click('#rig-thd74 button:has-text("DSC 70")');
+  assert.match(await page.innerText('#radios-cmdline'), /--d74-mode dsc70/);
   const nc = await page.innerText('#netcheck');
   assert.match(nc, /✓ vesseltracker tunnel 1 · 83\.220\.137\.136:22 TCP[\s\S]*✗ vesseltracker tunnel 2[\s\S]*BLOCKED[\s\S]*Fix: Allow outbound TCP 22[\s\S]*✓ Time sync/);
   assert.match(await page.innerText('#forwards'), /vesseltracker 203\.0\.113\.5:5321 UDP[\s\S]*42 AIS messages shared/);

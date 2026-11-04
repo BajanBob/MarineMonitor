@@ -39,6 +39,7 @@ class Hub:
         self.lines, self.alerts = [], []
         self.bands = {}  # channel name -> {"live": bool, "count": n, "last": t}
         self.rigs = {}   # key -> SoftReceiver ('ic9100', 'thd74')
+        self.station = None  # station.Station: radio configuration editable from the app
         self.net = None  # last station network check (netcheck.run)
         self.netcheck_args = {}
         self.forwards = []  # [{name, host, port, sent, last}] — AIS heard by radio, shared with AIS networks over UDP
@@ -64,11 +65,11 @@ class Hub:
             self.heard("DSC Ch 70 (UM435)")
         if line[3:6] == "DSE": return  # position extension: the app shows DSC positions already
         if self.forwards and line[3:6] in ("VDM", "VDO"): self.forward(line)
-        if line[3:6] == "DSC" and extra and extra.get("to"):
-            self.alerts.append({"kind": "dsc", "line": line, "to": extra["to"], "freq": extra.get("freq")})
+        if line[3:6] == "DSC" and extra and (extra.get("to") or extra.get("area")):
+            self.alerts.append({"kind": "dsc", "line": line, "to": extra.get("to"), "area": extra.get("area"), "freq": extra.get("freq")})
         else:
             self.lines.append(line)
-        await self.broadcast({"type": "nmea", "line": line, **({"to": extra.get("to"), "freq": extra.get("freq")} if extra else {})})
+        await self.broadcast({"type": "nmea", "line": line, **({"to": extra.get("to"), "area": extra.get("area"), "freq": extra.get("freq")} if extra else {})})
 
     async def alert(self, kind, **fields):
         band = {"navtex": "NAVTEX (international)", "egc": "Inmarsat-C EGC SafetyNET", "epirb": "EPIRB / PLB (COSPAS-SARSAT)"}[kind]
@@ -78,7 +79,10 @@ class Hub:
         await self.broadcast({"type": "alert", **a})
 
     async def status_loop(self):
+        n = 0
         while True:
+            if self.station and n % 6 == 0: await asyncio.to_thread(self.station.refresh_devices)
+            n += 1
             now = time.time()
             for b in self.bands.values(): b["live"] = now - b["last"] < 600
             await self.broadcast(self.status())
@@ -96,7 +100,8 @@ class Hub:
     def status(self):
         rigs = {k: r.status() for k, r in self.rigs.items()}
         return {"type": "status", "bands": self.bands, "rigs": rigs, "rx": next(iter(rigs.values()), None), "net": self.net,
-                "forwards": [{k: f[k] for k in ("name", "host", "port", "sent", "last", "error")} for f in self.forwards]}
+                "forwards": [{k: f[k] for k in ("name", "host", "port", "sent", "last", "error")} for f in self.forwards],
+                **({"station": self.station.status()} if self.station else {})}
 
     async def run_netcheck(self):
         import netcheck
@@ -115,9 +120,17 @@ class Hub:
         """From the app on the local network: change the IC-9100 scan plan. Receive-side only."""
         if msg.get("type") == "netcheck":
             await self.run_netcheck(); return
-        rx = self.rigs.get(str(msg.get("rig") or "ic9100")) or next(iter(self.rigs.values()), None)
-        if msg.get("type") == "tune" and rx:
-            try: await asyncio.to_thread(rx.set_mode, str(msg.get("mode")), msg.get("dwell"))
+        if msg.get("type") == "config" and self.station:
+            self.station.apply(msg.get("radios"))
+            await self.broadcast(self.status()); return
+        if msg.get("type") == "rescan" and self.station:
+            await asyncio.to_thread(self.station.refresh_devices)
+            await self.broadcast(self.status()); return
+        if msg.get("type") == "tune":
+            key = str(msg.get("rig") or "ic9100")
+            try:
+                if self.station: await asyncio.to_thread(self.station.tune, key, str(msg.get("mode")), msg.get("dwell"))
+                elif key in self.rigs: await asyncio.to_thread(self.rigs[key].set_mode, str(msg.get("mode")), msg.get("dwell"))
             except ValueError: return
             await self.broadcast(self.status())
 
@@ -169,6 +182,7 @@ async def serial_reader(hub, port, baud):
     except ImportError:
         print("pip install pyserial to read a serial NMEA device", file=sys.stderr); return
     while True:
+        s = None
         try:
             s = serial.Serial(port, baud, timeout=1)
             print(f"Serial NMEA connected: {port} at {baud} baud")
@@ -178,6 +192,8 @@ async def serial_reader(hub, port, baud):
         except (OSError, serial.SerialException) as e:
             print(f"Serial {port}: {e} (retrying in 10 s)", file=sys.stderr)
             await asyncio.sleep(10)
+        finally:
+            if s: s.close()
 
 
 async def main():
@@ -201,8 +217,11 @@ async def main():
     ap.add_argument("--d74-band", default="B", choices=["A", "B"], help="TH-D74 band to use (B covers HF too)")
     ap.add_argument("--d74-mode", default="ais-b", help="ais-scan | ais-a | ais-b | dsc70 | ais-dsc | hf-dsc")
     ap.add_argument("--d74-dwell", type=float, default=20)
+    ap.add_argument("--d74-baud", type=int, default=9600, help="TH-D74 USB COM baud rate (9600)")
+    ap.add_argument("--d74-audio-channel", type=int, default=0, help="0 = left, 1 = right")
     ap.add_argument("--forward", action="append", default=[], metavar="NAME=HOST:PORT",
                     help="share AIS heard by radio with an AIS network over UDP, e.g. vesseltracker=HOST:PORT (repeatable)")
+    ap.add_argument("--config", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "station.json"), help="where radio settings from the app are saved")
     ap.add_argument("--no-netcheck", action="store_true", help="don't run the station network check (vesseltracker TCP 22, NTP, relay)")
     ap.add_argument("--check", action="append", default=[], metavar="NAME=HOST:PORT", help="extra TCP address to test, e.g. MarineTraffic=5.9.207.224:10000")
     a = ap.parse_args()
@@ -218,37 +237,18 @@ async def main():
         hub.forwards.append({"name": name or host, "host": host, "port": int(port), "sent": 0, "last": None, "error": None})
         print(f"Sharing radio AIS with {name or host} ({host}:{port} UDP)")
     if not a.no_netcheck: tasks.append(hub.netcheck_loop())
-    if a.serial: tasks.append(serial_reader(hub, a.serial, a.baud))
-    if a.rig == "ic9100":
-        import threading
-        from icom_civ import Rig
-        from receiver import SoftReceiver, run_audio
-        try:
-            rig = Rig(a.civ_port, a.civ_baud, int(a.civ_addr, 0))
-            if a.civ_port: rig.main_band()
-        except Exception as e:  # noqa: BLE001
-            print(f"IC-9100 control port {a.civ_port}: {e}. Decoding audio without tuning (set the frequency by hand).", file=sys.stderr)
-            rig = Rig(None)
-        emit = lambda line, band, extra=None: asyncio.run_coroutine_threadsafe(hub.nmea(line, band, extra), loop)
-        hub.rigs["ic9100"] = SoftReceiver(emit, rig=rig, mode=a.mode, dwell=a.dwell, label="IC-9100", key="ic9100")
-        dev = int(a.audio) if a.audio and a.audio.isdigit() else a.audio
-        threading.Thread(target=run_audio, args=(hub.rigs["ic9100"], dev, a.audio_channel), daemon=True).start()
-        print(f"IC-9100 software receiver: {hub.rigs['ic9100'].status()['modeName']}")
-    if a.d74_port or a.d74_audio:
-        import threading
-        import kenwood_cat
-        from receiver import SoftReceiver, run_audio
-        try:
-            d74 = kenwood_cat.Rig(a.d74_port, band=a.d74_band)
-            if a.d74_port: d74.main_band()
-        except Exception as e:  # noqa: BLE001
-            print(f"TH-D74 control port {a.d74_port}: {e}. Decoding audio without tuning (set the frequency by hand).", file=sys.stderr)
-            d74 = kenwood_cat.Rig(None, band=a.d74_band)
-        emit = lambda line, band, extra=None: asyncio.run_coroutine_threadsafe(hub.nmea(line, band, extra), loop)
-        hub.rigs["thd74"] = SoftReceiver(emit, rig=d74, mode=a.d74_mode, dwell=a.d74_dwell, label="TH-D74", key="thd74")
-        dev = int(a.d74_audio) if a.d74_audio and a.d74_audio.isdigit() else a.d74_audio
-        threading.Thread(target=run_audio, args=(hub.rigs["thd74"], dev, 0), daemon=True).start()
-        print(f"TH-D74 software receiver: {hub.rigs['thd74'].status()['modeName']}")
+    # Radios: station.json (edited from the app's Receiver tab) wins; command-line radio options seed it the first time.
+    import station as st
+    hub.station = st.Station(hub, loop, a.config)
+    saved = hub.station.load()
+    seeded = st.from_args(a)
+    if saved and any(saved[k]["enabled"] for k in saved):
+        print(f"Radio settings from {a.config} (change them in the app's Receiver tab)")
+        cfg = saved
+    else:
+        cfg = seeded
+    await asyncio.to_thread(hub.station.refresh_devices)
+    hub.station.apply(cfg, save=bool(any(cfg[k]["enabled"] for k in cfg)))
     if a.navtex_file: tasks.append(follow(a.navtex_file, lambda t: hub.alert("navtex", text=t) if "ZCZC" in t else asyncio.sleep(0), split_on="NNNN"))
     if a.egc_file: tasks.append(follow(a.egc_file, lambda t: hub.alert("egc", text=t.strip()) if t.strip() else asyncio.sleep(0)))
     async def epirb_line(t):

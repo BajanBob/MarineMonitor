@@ -22,7 +22,7 @@
       <button id="face-night" type="button" title="Night faceplate: red, protects night vision">◐ Night</button>
     </div>
   </header>
-  <div id="distress" class="distress" role="alert" hidden></div>
+  <div id="distress" class="distress" role="alert" hidden><span id="distress-text"></span> <button id="distress-ack" class="btn" type="button" title="Acknowledge: the faceplate returns to normal; the call stays listed in the GMDSS tab">Acknowledge</button></div>
 
   <nav class="tabs" role="tablist">
     <button data-tab="radar" class="on">Radar</button>
@@ -131,6 +131,18 @@
           <div class="band"><h3>Band C · Kenwood TH-D74 · software receiver</h3><div id="rig-thd74"></div></div>
         </div>
       </div>
+      <form id="radios-form" class="card grid" autocomplete="off">
+        <h2>Radio connections (CAT control, ports, audio)</h2>
+        <p id="radios-msg" class="muted small">Edit the radios here. "Apply to station" sends the settings to the station PC or Pi, which reconnects the radios and saves them. Without a connection to the station, use "Show command line" and run that on the station.</p>
+        <div id="radios"></div>
+        <datalist id="port-list"></datalist><datalist id="audio-list"></datalist>
+        <div class="row">
+          <button class="btn primary" type="submit" id="radios-apply" title="Send these settings to the station helper (needs the station on the local network)">Apply to station</button>
+          <button class="btn" type="button" id="radios-rescan" title="Ask the station to look again for serial ports and sound cards">Rescan ports</button>
+          <button class="btn" type="button" id="radios-cmd" title="The station helper command for these settings">Show command line</button>
+        </div>
+        <pre id="radios-cmdline" class="cmdline" hidden></pre>
+      </form>
       <div class="card"><h2>Station network check</h2>
         <p class="muted small">Tested every 10 minutes by the station PC: the vesseltracker.com station tunnel (TCP 22 to 83.220.137.136 and 85.10.199.209), time sync (UDP 123) and the Marine Monitor server. Marine Monitor can't change the router; it shows what is blocked and how to fix it.</p>
         <ul id="netcheck" class="alerts"></ul>

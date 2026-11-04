@@ -17,8 +17,9 @@ jobs:
         run: npm test
       - name: Software receiver tests (DSC + AIS decoded from synthetic IC-9100 audio, CI-V, scan plans)
         run: |
-          pip install numpy
+          pip install numpy websockets
           python -m unittest discover -s tests -p 'test_dsp.py' -v
+          VERBOSE=1 python tests/live_ws.py
           python -m py_compile helper/*.py && python helper/marine_helper.py --help
           for f in pi/*.sh; do bash -n "$f"; done && shellcheck -S error pi/*.sh
       - name: Browser test (radar, map, GMDSS, weather, day/night faceplates)

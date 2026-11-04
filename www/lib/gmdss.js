@@ -4,6 +4,20 @@ import { mmsiCountry } from './ais.js';
 
 export const DSC_CATEGORY = { '00': 'Routine', '08': 'Safety (Sécurité)', '10': 'Urgency (Pan-Pan)', '12': 'Distress (Mayday)' };
 export const DSC_FORMAT = { '02': 'Geographic area', '12': 'Distress alert', '14': 'Group', '16': 'All ships', '20': 'Individual', '23': 'Individual (auto)' };
+export const DSC_COMM = { '00': 'Voice (FM, F3E/G3E)', '01': 'Voice (duplex)', '09': 'Voice (SSB, J3E)', '13': 'Teletype (FEC, F1B/J2B)', '15': 'Teletype (ARQ)', '26': 'No information' };
+/** Addressing of a DSC call: who it is for. */
+export const DSC_ADDRESSING = { '02': 'Geographic area (all ships in an area)', '12': 'Distress alert (all stations)', '14': 'Group', '16': 'All ships', '20': 'Individual', '23': 'Individual (semi/automatic)' };
+/** DSC geographic area (10 digits): quadrant, latitude ° (2), longitude ° (3), Δlat ° (2), Δlon ° (2).
+ *  The reference point is the area's north-west corner; Δlat runs south and Δlon runs east (ITU-R M.493). */
+export function dscArea(d) {
+  if (!/^\d{10}$/.test(String(d || ''))) return null;
+  const q = +d[0], lat = +d.slice(1, 3), lon = +d.slice(3, 6), dlat = +d.slice(6, 8), dlon = +d.slice(8, 10);
+  if (q > 3 || lat > 90 || lon > 180) return null;
+  const sLat = q >= 2 ? -1 : 1, sLon = q === 1 || q === 3 ? -1 : 1;
+  const north = sLat * lat, west = sLon * lon;
+  return { north, west, south: north - dlat, east: west + dlon, dlat, dlon,
+    text: `${lat}°${sLat > 0 ? 'N' : 'S'} ${String(lon).padStart(3, '0')}°${sLon > 0 ? 'E' : 'W'}, ${dlat}° south × ${dlon}° east` };
+}
 export const DSC_TELECOMMAND = { '00': 'Voice (simplex)', '01': 'Voice (duplex)', '03': 'Polling', '04': 'Unable to comply', '05': 'End of call', '06': 'Data', '09': 'J3E telephone', '10': 'Distress acknowledgement', '12': 'Distress relay', '13': 'Teletype FEC', '15': 'Teletype ARQ', '18': 'Test', '21': 'Position update', '26': 'No information' };
 export const DSC_NATURE = { '00': 'Fire, explosion', '01': 'Flooding', '02': 'Collision', '03': 'Grounding', '04': 'Listing, danger of capsizing', '05': 'Sinking', '06': 'Disabled and adrift', '07': 'Undesignated distress', '08': 'Abandoning ship', '09': 'Piracy / armed robbery', '10': 'Man overboard', '12': 'EPIRB emission' };
 
@@ -30,8 +44,25 @@ export function parseDsc(line) {
     mmsi: from, country: from ? mmsiCountry(from) : '', nature: distress ? (DSC_NATURE[natDistress || nat] || '') : '',
     position: dscPosition(pos || ''), time: /^\d{4}$/.test(time || '') && time !== '8888' ? `${time.slice(0, 2)}:${time.slice(2)} UTC` : null,
     ack: ack === 'B' ? 'Acknowledgement' : ack === 'R' ? 'Acknowledgement request' : '', expansion: exp === 'E',
-    formatCode: fmt, telecommand: !distress ? DSC_TELECOMMAND[nat] || '' : '', channel: /^90\d{4}$/.test(pos || '') ? `Ch ${+pos.slice(2)}` : null,
+    formatCode: fmt, telecommand: fmt !== '12' ? DSC_TELECOMMAND[nat] || '' : '', channel: /^90\d{4}$/.test(pos || '') ? `Ch ${+pos.slice(2)}` : null,
   };
+  // Classification (ITU-R M.493): addressing, distress relay / acknowledgement, nature, voice channel.
+  out.addressing = DSC_ADDRESSING[fmt] || out.format;
+  out.relay = fmt !== '12' && cat === '12' && nat === '12';
+  out.distressAck = fmt !== '12' && cat === '12' && nat === '10';
+  if (out.relay || out.distressAck) {
+    out.relayBy = /^\d{10}$/.test((addr || '').trim()) ? addr.trim().slice(0, 9) : (addr || '').trim();
+    out.distressMmsi = /^\d{10}$/.test(mmsiDistress || '') ? mmsiDistress.slice(0, 9) : (mmsiDistress || '');
+    out.nature = DSC_NATURE[natDistress] || '';
+    out.format = out.relay ? 'Distress relay' : 'Distress acknowledgement';
+  }
+  if (distress) {
+    const code = fmt === '12' ? nat : natDistress;
+    out.natureCode = code || null;
+    out.undesignated = !code || code === '07';
+    if (out.undesignated) out.nature = 'Undesignated distress';
+    out.commType = DSC_COMM[fmt === '12' ? comm : comm] || null;
+  }
   return out;
 }
 

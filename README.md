@@ -76,6 +76,14 @@ Use `--audio` to choose the sound device if the radio isn't the default one. For
 
 > The IC-9100's main receiver hears one frequency at a time, so AIS scan catches each AIS channel about half the time. FM audio filtering also limits AIS decoding (9600 baud). Busy waters need a dedicated dual-channel AIS receiver such as a dAISy or an RTL-SDR with AIS-catcher; those feed the same helper over UDP 10110. DSC (1200 and 100 baud) decodes well from the IC-9100.
 
+#### Changing radios from the app
+**Receiver → Radio connections** sets each radio:
+- **UM435:** serial port and baud rate.
+- **IC-9100:** CI-V (CAT) port, baud rate and address, sound card and channel, mode and dwell.
+- **TH-D74:** USB COM (CAT) port, baud rate and band, sound card, mode and dwell.
+
+**Apply to station** sends the settings to the station helper on the local network; it reconnects the radios and saves them in `helper/station.json`. **Show command line** gives the equivalent command if the app isn't connected to the station.
+
 #### Raspberry Pi station
 The release includes **MarineMonitor-<version>-Pi.zip**: the station helper with a one-step installer that runs it as a service at boot. See `pi/README.md`.
 

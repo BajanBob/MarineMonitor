@@ -222,6 +222,38 @@ class Forward(unittest.TestCase):
         self.assertEqual(h.status()['forwards'][0]['sent'], 1)
 
 
+class StationConfig(unittest.TestCase):
+    def test_clean_rejects_bad_values(self):
+        import station
+        c = station.clean({'ic9100': {'enabled': 1, 'baud': 1234, 'mode': 'rm -rf', 'addr': 'zz', 'dwell': 9999, 'port': 'COM4\n'},
+                           'thd74': {'band': 'a', 'channel': '1'}, 'junk': {}})
+        self.assertEqual(c['ic9100'], {'enabled': True, 'port': 'COM4', 'baud': 19200, 'addr': '0x7C', 'audio': '', 'channel': 0, 'mode': 'ais-a', 'dwell': 300.0})
+        self.assertEqual((c['thd74']['band'], c['thd74']['channel']), ('A', 1))
+        self.assertNotIn('junk', c)
+
+    def test_apply_tune_save_and_stop(self):
+        import asyncio, json, os, tempfile, station, marine_helper
+        path = os.path.join(tempfile.mkdtemp(), 'station.json')
+        async def go():
+            hub = marine_helper.Hub()
+            stn = station.Station(hub, asyncio.get_running_loop(), path); hub.station = stn
+            stn.apply({'ic9100': {'enabled': True, 'mode': 'ais-scan', 'audio': 'NoSuchCard'}, 'thd74': {'enabled': True, 'mode': 'dsc70'},
+                       'um435': {'enabled': True, 'port': '/dev/ttyNOPE', 'baud': 4800}})
+            self.assertEqual(sorted(hub.rigs), ['ic9100', 'thd74'])
+            self.assertEqual(hub.rigs['thd74'].status()['channel'], 'DSC Ch 70 (TH-D74)')
+            await hub.command({'type': 'tune', 'rig': 'ic9100', 'mode': 'ais-b', 'dwell': 30})
+            self.assertEqual(hub.rigs['ic9100'].status()['channel'], 'AIS 2 (Ch 88B)')
+            saved = json.load(open(path))
+            self.assertEqual((saved['ic9100']['mode'], saved['ic9100']['dwell'], saved['um435']['port']), ('ais-b', 30.0, '/dev/ttyNOPE'))
+            self.assertIn('station', hub.status())
+            await hub.command({'type': 'config', 'radios': {'thd74': {'enabled': True, 'band': 'A', 'mode': 'ais-a'}}})
+            self.assertEqual(sorted(hub.rigs), ['thd74'])
+            self.assertEqual(hub.rigs['thd74'].rig.b, '0')
+            stn.stop_all(); self.assertEqual(hub.rigs, {})
+            await asyncio.sleep(0)
+        asyncio.run(go())
+
+
 class Scan(unittest.TestCase):
     def test_plans(self):
         import receiver
