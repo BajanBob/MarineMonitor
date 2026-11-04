@@ -1,6 +1,6 @@
 {
   "name": "marine-monitor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "Marine Monitor: coast-watch receiver — AIS, DSC, NAVTEX, EPIRB, GMDSS alerts, virtual radar and marine weather.",

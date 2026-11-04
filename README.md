@@ -49,7 +49,7 @@ Coast-watch receiver app for **Ocean City coastal station, 8PFX** (Barbados): vi
 1. Render → **New → Blueprint** → choose **BajanBob/MarineMonitor** (uses `render.yaml`).
 2. Set **AISSTREAM_KEY**: free key from <https://aisstream.io> (sign in with GitHub → API Keys).
 3. Set **FEED_KEY**: any long random text, 16+ characters. The station helper uses the same text.
-4. The app is then at `https://marine-monitor.onrender.com`. The apps use that address by default.
+4. The app is then at `https://marine-monitor-16qf.onrender.com`. The apps use that address by default.
 
 ### 2. The station radios
 
@@ -58,7 +58,7 @@ pip install -r helper/requirements.txt
 python helper/marine_helper.py \
   --serial COM3 --baud 4800 \
   --rig ic9100 --civ-port COM4 --mode ais-scan --dwell 20 \
-  --relay https://marine-monitor.onrender.com --feed-key "YOUR FEED_KEY"
+  --relay https://marine-monitor-16qf.onrender.com --feed-key "YOUR FEED_KEY"
 ```
 
 The `--serial` line is the UM435 (through a USB-to-NMEA/RS-422 adapter on its NMEA OUT wires). The `--rig` line is the IC-9100: one USB cable carries both CI-V and audio.
@@ -87,7 +87,7 @@ Run the helper on the PC/Raspberry Pi next to the receivers (Python 3.9+):
 
 ```bash
 pip install websockets pyserial
-python helper/marine_helper.py --relay https://marine-monitor.onrender.com --feed-key "YOUR FEED_KEY" \
+python helper/marine_helper.py --relay https://marine-monitor-16qf.onrender.com --feed-key "YOUR FEED_KEY" \
        --navtex-file navtex.txt --epirb-file epirb.txt --egc-file egc.txt
 ```
 

@@ -19,7 +19,7 @@ const localTime = (iso) => { const d = new Date(/Z$|[+-]\d\d:?\d\d$/.test(iso) ?
 
 // ---------------------------------------------------------------- settings
 const hosted = /^https?:$/.test(location.protocol) && !['localhost', ''].includes(location.hostname);
-const DEFAULTS = { call: '8PFX', name: 'Ocean City', grid: 'GK03ec', grid2: 'GK03ff', origin: 'sw', mmsi: '', aisSrc: 'both', dscSrc: 'both', lat: null, lon: null, relay: hosted ? '' : 'https://marine-monitor.onrender.com', rx: '', buoy: '41040', metar: 'TBPB', alarm: true, demo: false, face: 'day', range: 24 };
+const DEFAULTS = { call: '8PFX', name: 'Ocean City', grid: 'GK03ec', grid2: 'GK03ff', origin: 'sw', mmsi: '', aisSrc: 'both', dscSrc: 'both', lat: null, lon: null, relay: hosted ? '' : 'https://marine-monitor-16qf.onrender.com', rx: '', buoy: '41040', metar: 'TBPB', alarm: true, demo: false, face: 'day', range: 24 };
 const S = { ...DEFAULTS, ...store.get('mm-settings', {}) };
 const save = () => store.set('mm-settings', S);
 /** Station reference point and watch area from the SW and NE grid squares (default GK03ec Bridgetown → GK03ff Bathsheba). */

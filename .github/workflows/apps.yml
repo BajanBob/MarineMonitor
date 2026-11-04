@@ -167,6 +167,6 @@ jobs:
             | **MarineMonitor-${{ steps.v.outputs.version }}-source.zip** | Everything: the app, the relay and the station helper (UM435 + IC-9100 software receiver) |
             | **MarineMonitor-iPhone-unsigned.ipa** | iPhone: must be signed with an Apple Developer account before installing |
 
-            Or just open https://marine-monitor.onrender.com in any browser.
+            Or just open https://marine-monitor-16qf.onrender.com in any browser.
           files: artifacts/*
           overwrite_files: true

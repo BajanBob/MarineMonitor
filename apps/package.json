@@ -1,7 +1,7 @@
 {
   "name": "marine-monitor-apps",
   "productName": "Marine Monitor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Coast-watch receiver: virtual radar, live map, GMDSS alerts and marine weather.",
   "private": true,
   "main": "electron/main.cjs",

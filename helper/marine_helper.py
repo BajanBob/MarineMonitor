@@ -144,7 +144,7 @@ async def main():
     ap.add_argument("--serial", help="serial NMEA device, e.g. /dev/ttyUSB0 or COM3")
     ap.add_argument("--baud", type=int, default=38400, help="38400 for AIS, 4800 for most DSC radios")
     ap.add_argument("--ws", type=int, default=8765, help="WebSocket port for the app on the local network (0 = off)")
-    ap.add_argument("--relay", help="Marine Monitor relay URL, e.g. https://marine-monitor.onrender.com")
+    ap.add_argument("--relay", help="Marine Monitor relay URL, e.g. https://marine-monitor-16qf.onrender.com")
     ap.add_argument("--feed-key", default=os.environ.get("FEED_KEY"), help="the relay's FEED_KEY")
     ap.add_argument("--navtex-file"); ap.add_argument("--egc-file"); ap.add_argument("--epirb-file")
     ap.add_argument("--rig", choices=["ic9100", "none"], default="none", help="radio used as a software receiver (Band B)")
