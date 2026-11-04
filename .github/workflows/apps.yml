@@ -6,7 +6,7 @@ name: Marine Monitor apps
 on:
   push:
     branches: [main]
-    paths: ['apps/**', 'www/**', 'helper/**', '.github/workflows/apps.yml']
+    paths: ['apps/**', 'www/**', 'helper/**', 'pi/**', '.github/workflows/apps.yml']
   workflow_dispatch:
     inputs:
       release_tag:
@@ -137,6 +137,8 @@ jobs:
         run: |
           V=${{ steps.v.outputs.version }}
           git archive --format=zip --prefix=MarineMonitor/ -o artifacts/MarineMonitor-$V-source.zip HEAD
+          mkdir -p pizip/MarineMonitor-Pi && cp -r helper pi/* pizip/MarineMonitor-Pi/ && rm -rf pizip/MarineMonitor-Pi/helper/__pycache__
+          (cd pizip && zip -qr ../artifacts/MarineMonitor-$V-Pi.zip MarineMonitor-Pi)
           cd artifacts
           [ -f MarineMonitor.apk ] && zip -q MarineMonitor-$V-Android.zip MarineMonitor.apk
           ls MarineMonitor-*.exe >/dev/null 2>&1 && zip -q MarineMonitor-$V-Windows.zip MarineMonitor-*.exe
@@ -164,6 +166,7 @@ jobs:
             | **MarineMonitor-${{ steps.v.outputs.version }}-Portable.exe** | Windows: runs without installing |
             | **MarineMonitor-GooglePlay.aab** | Google Play Console only |
             | **MarineMonitor-${{ steps.v.outputs.version }}-Android.zip / -Windows.zip / -iPhone.zip** | The same apps zipped, for sending by WhatsApp or email |
+            | **MarineMonitor-${{ steps.v.outputs.version }}-Pi.zip** | Raspberry Pi station: the helper for the UM435, IC-9100 and TH-D74 with a one-step installer (`sudo ./install.sh`) |
             | **MarineMonitor-${{ steps.v.outputs.version }}-source.zip** | Everything: the app, the relay and the station helper (UM435 + IC-9100 software receiver) |
             | **MarineMonitor-iPhone-unsigned.ipa** | iPhone: must be signed with an Apple Developer account before installing |
 

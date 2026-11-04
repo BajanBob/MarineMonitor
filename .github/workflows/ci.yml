@@ -20,6 +20,7 @@ jobs:
           pip install numpy
           python -m unittest discover -s tests -p 'test_dsp.py' -v
           python -m py_compile helper/*.py && python helper/marine_helper.py --help
+          for f in pi/*.sh; do bash -n "$f"; done && shellcheck -S error pi/*.sh
       - name: Browser test (radar, map, GMDSS, weather, day/night faceplates)
         shell: bash
         run: |

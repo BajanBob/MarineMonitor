@@ -163,14 +163,21 @@ async def follow(path, on_text, split_on=None):
 
 
 async def serial_reader(hub, port, baud):
+    """NMEA from a serial port (UM435). If the radio or adapter is unplugged, keep retrying every 10 s."""
     try:
         import serial  # pyserial
     except ImportError:
         print("pip install pyserial to read a serial NMEA device", file=sys.stderr); return
-    s = serial.Serial(port, baud, timeout=1)
     while True:
-        line = await asyncio.to_thread(s.readline)
-        if line: await hub.nmea(line.decode("ascii", "ignore"))
+        try:
+            s = serial.Serial(port, baud, timeout=1)
+            print(f"Serial NMEA connected: {port} at {baud} baud")
+            while True:
+                line = await asyncio.to_thread(s.readline)
+                if line: await hub.nmea(line.decode("ascii", "ignore"))
+        except (OSError, serial.SerialException) as e:
+            print(f"Serial {port}: {e} (retrying in 10 s)", file=sys.stderr)
+            await asyncio.sleep(10)
 
 
 async def main():
@@ -216,8 +223,12 @@ async def main():
         import threading
         from icom_civ import Rig
         from receiver import SoftReceiver, run_audio
-        rig = Rig(a.civ_port, a.civ_baud, int(a.civ_addr, 0))
-        if a.civ_port: rig.main_band()
+        try:
+            rig = Rig(a.civ_port, a.civ_baud, int(a.civ_addr, 0))
+            if a.civ_port: rig.main_band()
+        except Exception as e:  # noqa: BLE001
+            print(f"IC-9100 control port {a.civ_port}: {e}. Decoding audio without tuning (set the frequency by hand).", file=sys.stderr)
+            rig = Rig(None)
         emit = lambda line, band, extra=None: asyncio.run_coroutine_threadsafe(hub.nmea(line, band, extra), loop)
         hub.rigs["ic9100"] = SoftReceiver(emit, rig=rig, mode=a.mode, dwell=a.dwell, label="IC-9100", key="ic9100")
         dev = int(a.audio) if a.audio and a.audio.isdigit() else a.audio
@@ -227,8 +238,12 @@ async def main():
         import threading
         import kenwood_cat
         from receiver import SoftReceiver, run_audio
-        d74 = kenwood_cat.Rig(a.d74_port, band=a.d74_band)
-        if a.d74_port: d74.main_band()
+        try:
+            d74 = kenwood_cat.Rig(a.d74_port, band=a.d74_band)
+            if a.d74_port: d74.main_band()
+        except Exception as e:  # noqa: BLE001
+            print(f"TH-D74 control port {a.d74_port}: {e}. Decoding audio without tuning (set the frequency by hand).", file=sys.stderr)
+            d74 = kenwood_cat.Rig(None, band=a.d74_band)
         emit = lambda line, band, extra=None: asyncio.run_coroutine_threadsafe(hub.nmea(line, band, extra), loop)
         hub.rigs["thd74"] = SoftReceiver(emit, rig=d74, mode=a.d74_mode, dwell=a.d74_dwell, label="TH-D74", key="thd74")
         dev = int(a.d74_audio) if a.d74_audio and a.d74_audio.isdigit() else a.d74_audio

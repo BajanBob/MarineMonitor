@@ -115,11 +115,18 @@ class SoftReceiver:
 
 
 def run_audio(rx, device=None, channel=0):
-    """Read the radio's USB audio (needs `pip install sounddevice`) and feed the receiver forever."""
-    import sounddevice as sd
+    """Read the radio's USB audio (needs `pip install sounddevice`) and feed the receiver forever.
+    If the sound card is missing or unplugged, keep retrying every 10 s."""
     def cb(indata, frames, t, status):
         rx.feed(indata[:, channel].copy())
-    with sd.InputStream(device=device, channels=channel + 1, samplerate=rx.rate, blocksize=4800, callback=cb):
-        while True:
-            time.sleep(0.5)
-            rx.tick()
+    while True:
+        try:
+            import sounddevice as sd  # needs the PortAudio library (Pi: libportaudio2)
+            with sd.InputStream(device=device, channels=channel + 1, samplerate=rx.rate, blocksize=4800, callback=cb):
+                print(f"{rx.label} audio connected: {device or 'default sound card'}")
+                while True:
+                    time.sleep(0.5)
+                    rx.tick()
+        except Exception as e:  # noqa: BLE001 (PortAudio raises several types)
+            print(f"{rx.label} audio ({device or 'default'}): {e} (retrying in 10 s)")
+            time.sleep(10)
