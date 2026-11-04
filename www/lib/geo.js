@@ -18,6 +18,14 @@ export function gridToLatLon(grid) {
   return { lat: lat + h / 2, lon: lon + w / 2 };
 }
 
+/** Maidenhead locator → its bounds { s, w, n, e } in degrees. */
+export function gridBounds(grid) {
+  const c = gridToLatLon(grid), u = String(grid).trim();
+  const w = u.length >= 10 ? 2 / 24 / 10 / 24 : u.length >= 8 ? 2 / 24 / 10 : u.length >= 6 ? 2 / 24 : 2;
+  const h = u.length >= 10 ? 1 / 24 / 10 / 24 : u.length >= 8 ? 1 / 24 / 10 : u.length >= 6 ? 1 / 24 : 1;
+  return { s: c.lat - h / 2, w: c.lon - w / 2, n: c.lat + h / 2, e: c.lon + w / 2 };
+}
+
 /** lat/lon → 6-character Maidenhead locator. */
 export function latLonToGrid(lat, lon) {
   let x = lon + 180, y = lat + 90;

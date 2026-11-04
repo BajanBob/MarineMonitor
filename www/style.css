@@ -84,3 +84,12 @@ code { font-family: ui-monospace, monospace; font-size: .85em; }
 .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 10px 14px; border-radius: 10px; z-index: 2000; max-width: 90vw; }
 .demo-tag { color: var(--warn); font-weight: 700; }
 @media (max-width: 520px) { .face button { padding: 6px 8px; } h1 { font-size: 1.05rem; } .tabs { top: 59px; } }
+.src-row { align-items: center; margin-bottom: 8px; } .src-row .lbl { font-weight: 600; font-size: .9rem; }
+.seg button:disabled { opacity: .55; cursor: not-allowed; }
+.chans li.tuned { border-color: var(--accent); }
+.dwell { display: flex; align-items: center; gap: 6px; font-size: .85rem; margin: 8px 0 4px; } .dwell input { width: 5em; font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+.grid select { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+.forme { font-weight: 700; color: var(--accent); }
+.callcard pre { white-space: pre-wrap; font: .82rem/1.35 ui-monospace, monospace; background: var(--bg); padding: 8px; border-radius: 8px; overflow-wrap: anywhere; }
+.facts-box .facts { margin: 6px 0; } a.btn { text-decoration: none; display: inline-block; }
+#band-b { margin-top: 8px; }

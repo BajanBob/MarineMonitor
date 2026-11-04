@@ -6,7 +6,7 @@ name: Marine Monitor apps
 on:
   push:
     branches: [main]
-    paths: ['apps/**', 'www/**', '.github/workflows/apps.yml']
+    paths: ['apps/**', 'www/**', 'helper/**', '.github/workflows/apps.yml']
   workflow_dispatch:
     inputs:
       release_tag:
@@ -133,6 +133,8 @@ jobs:
         run: echo "version=$(node -p "require('./apps/package.json').version")" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with: { path: artifacts, pattern: 'mm-*', merge-multiple: true }
+      - name: Source zip (app, relay, station helper)
+        run: git archive --format=zip --prefix=MarineMonitor/ -o artifacts/MarineMonitor-${{ steps.v.outputs.version }}-source.zip HEAD
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.release_tag || format('v{0}', steps.v.outputs.version) }}
@@ -148,6 +150,7 @@ jobs:
             | **MarineMonitor-${{ steps.v.outputs.version }}-Setup.exe** | Windows: installs with a Start-menu icon. If Windows says "protected your PC", click **More info → Run anyway** |
             | **MarineMonitor-${{ steps.v.outputs.version }}-Portable.exe** | Windows: runs without installing |
             | **MarineMonitor-GooglePlay.aab** | Google Play Console only |
+            | **MarineMonitor-${{ steps.v.outputs.version }}-source.zip** | Everything: the app, the relay and the station helper (UM435 + IC-9100 software receiver) |
             | **MarineMonitor-iPhone-unsigned.ipa** | iPhone: must be signed with an Apple Developer account before installing |
 
             Or just open https://marine-monitor.onrender.com in any browser.

@@ -1,0 +1,4 @@
+numpy>=1.24
+sounddevice>=0.4
+pyserial>=3.5
+websockets>=12

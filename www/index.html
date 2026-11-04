@@ -28,6 +28,7 @@
     <button data-tab="radar" class="on">Radar</button>
     <button data-tab="map">Map</button>
     <button data-tab="alerts">GMDSS <span id="alert-count" class="badge" hidden></span></button>
+    <button data-tab="mmsi" title="MMSI decoder, directory, individual and group DSC calls">MMSI</button>
     <button data-tab="wx">Weather</button>
     <button data-tab="rx">Receiver</button>
     <button data-tab="settings">Settings</button>
@@ -40,6 +41,8 @@
         <div class="radar-ctl">
           <span class="lbl">Range</span>
           <div id="ranges" class="seg"></div>
+          <span class="lbl">AIS</span>
+          <div id="ais-src" class="seg" role="group" aria-label="AIS source"></div>
           <span class="legend"><i class="k-net"></i>Internet AIS <i class="k-rf"></i>Direct RF <i class="k-both"></i>Both <i class="k-aton"></i>Aid to nav</span>
         </div>
       </div>
@@ -57,7 +60,9 @@
     </section>
 
     <section id="tab-alerts" class="tab">
-      <div class="card"><h2>Distress, urgency and safety (Sécurité)</h2><ul id="alerts" class="alerts"></ul></div>
+      <div class="card"><h2>Distress, urgency and safety (Sécurité)</h2>
+        <div class="row src-row"><span class="lbl">DSC from</span><div id="dsc-src" class="seg" role="group" aria-label="DSC source"></div></div>
+        <ul id="alerts" class="alerts"></ul></div>
       <div class="card"><h2>NAVAREA IV navigational warnings <span class="muted small">(NGA, internet)</span></h2><ul id="msi" class="alerts"></ul></div>
       <div class="card info">
         <h2>Services and what can be received</h2>
@@ -70,6 +75,40 @@
           <dt>SSAS (ship security alert)</dt><dd><strong>Not receivable, by design.</strong> SSAS is covert and goes only to the ship's company and flag state. Marine Monitor doesn't try to detect or intercept it.</dd>
         </dl>
       </div>
+    </section>
+
+    <section id="tab-mmsi" class="tab">
+      <form id="mmsi-form" class="card grid">
+        <h2>MMSI decoder</h2>
+        <label>MMSI <input id="mmsi-in" inputmode="numeric" maxlength="11" placeholder="9 digits, e.g. 314123450" autocomplete="off" title="Type any 9-digit MMSI: ship, coast station, group, SAR aircraft, AtoN, SART, MOB or EPIRB"></label>
+        <div class="row"><button class="btn primary" type="submit">Decode</button></div>
+        <div id="mmsi-out" class="facts-box"></div>
+      </form>
+      <form id="call-form" class="card grid">
+        <h2>DSC call: individual or group</h2>
+        <p class="muted small">Calls are sent by the station's type-approved DSC radio (Uniden UM435). Marine Monitor prepares the call, shows the exact DSC sequence, logs it and watches for the acknowledgement. It never transmits.</p>
+        <div class="seg" id="call-type" role="group" aria-label="Call type">
+          <button type="button" data-v="individual" class="on" title="Call one station by its MMSI">Individual</button>
+          <button type="button" data-v="group" title="Call every radio programmed with a group MMSI (starts with 0)">Group</button>
+        </div>
+        <label>To <input id="call-to" list="dir-list" inputmode="numeric" maxlength="9" placeholder="MMSI or pick from the directory" autocomplete="off"></label>
+        <datalist id="dir-list"></datalist>
+        <label>Category <select id="call-cat" title="Routine for normal calls; Safety (Sécurité) or Urgency (Pan-Pan) only when justified"><option value="routine">Routine</option><option value="safety">Safety (Sécurité)</option><option value="urgency">Urgency (Pan-Pan)</option></select></label>
+        <label>Working channel <select id="call-ch" title="The channel both stations switch to after the DSC call"></select></label>
+        <div class="row"><button class="btn primary" type="submit">Prepare call</button></div>
+        <div id="call-out"></div>
+      </form>
+      <div class="card"><h2>Call log</h2><ul id="call-log" class="alerts"></ul></div>
+      <form id="dir-form" class="card grid">
+        <h2>Directory</h2>
+        <div class="row">
+          <label>Name <input id="dir-name" maxlength="40" autocomplete="off" placeholder="e.g. Fishing fleet Oistins"></label>
+          <label>MMSI <input id="dir-mmsi" inputmode="numeric" maxlength="9" autocomplete="off" placeholder="9 digits (group: starts with 0)"></label>
+        </div>
+        <label>Group members (optional, MMSIs separated by commas) <input id="dir-members" autocomplete="off"></label>
+        <div class="row"><button class="btn primary" type="submit">Add / update</button></div>
+        <ul id="dir" class="alerts"></ul>
+      </form>
     </section>
 
     <section id="tab-wx" class="tab">
@@ -86,18 +125,24 @@
         <h2>Dual-band receiver</h2>
         <p id="rx-status" class="muted"></p>
         <div class="bands">
-          <div class="band"><h3>Band A · VHF marine</h3><ul id="band-a" class="chans"></ul></div>
-          <div class="band"><h3>Band B · MF/HF · UHF · L-band</h3><ul id="band-b" class="chans"></ul></div>
+          <div class="band"><h3>Band A · Uniden UM435 · DSC watch</h3><ul id="band-a" class="chans"></ul>
+            <p class="muted small">The UM435 keeps a constant DSC watch on Ch 70 while you listen on any channel, and sends every call it receives to Marine Monitor (NMEA OUT, 4800 baud).</p></div>
+          <div class="band"><h3>Band B · Icom IC-9100 · software receiver</h3>
+            <div id="rx-modes" class="seg" role="group" aria-label="IC-9100 receive mode"></div>
+            <label class="dwell">Scan dwell <input id="rx-dwell" type="number" min="2" max="300" step="1" value="20" title="Seconds on each channel while scanning"> s</label>
+            <p id="rx-now" class="small"></p>
+            <ul id="band-b" class="chans"></ul></div>
         </div>
       </div>
+      <div class="card"><h2>Other receivers (optional)</h2><ul id="band-c" class="chans"></ul></div>
       <div class="card info">
-        <h2>Setting up direct RF</h2>
+        <h2>Connecting the radios</h2>
         <ol class="small">
-          <li>At the station, connect a receiver to a PC or Raspberry Pi: an RTL-SDR (AIS, DSC, 406 MHz; NAVTEX needs HF coverage), or a marine VHF/AIS unit with NMEA output.</li>
-          <li>Run <code>helper/marine_helper.py</code>. It takes NMEA from AIS-catcher, rtl_ais, a DSC radio or a NAVTEX/EGC decoder, and sends it to this app and to the relay.</li>
-          <li>Set the receiver address below, or set FEED_KEY so phones anywhere see the station's RF picture through the relay.</li>
+          <li><strong>UM435 (Band A):</strong> NMEA OUT wires → USB-to-NMEA/RS-422 adapter → station PC. Program the station's MMSI in the UM435.</li>
+          <li><strong>IC-9100 (Band B):</strong> one USB cable carries CI-V control and receive audio. Menu: CI-V USB Echo Back OFF, CI-V baud 19200, USB audio output level about 50%. Marine Monitor tunes the main receiver and decodes AIS and DSC from the audio in software.</li>
+          <li>Run <code>python helper/marine_helper.py --serial COM3 --baud 4800 --rig ic9100 --civ-port COM4 --mode ais-scan</code> and put its address in Settings → Station receiver. Add <code>--relay</code> and <code>--feed-key</code> so phones anywhere see the station.</li>
         </ol>
-        <p class="muted small">Receive only. Marine Monitor never transmits.</p>
+        <p class="muted small">The IC-9100's main receiver hears one frequency at a time, so "AIS scan" alternates Ch 87B and 88B (each heard about half the time). For both AIS channels all the time, add a dedicated AIS receiver later. Receive only: Marine Monitor never transmits.</p>
       </div>
     </section>
 
@@ -106,14 +151,17 @@
         <h2>Coastal station</h2>
         <label>Call sign <input id="st-call" maxlength="12" autocomplete="off"></label>
         <label>Name <input id="st-name" maxlength="40" autocomplete="off"></label>
-        <label>Grid square <input id="st-grid" maxlength="10" placeholder="e.g. GK03ec" autocomplete="off"></label>
+        <label>South-west grid square <input id="st-grid" maxlength="10" placeholder="GK03ec (Bridgetown)" autocomplete="off" title="Your south-west corner: bearings are measured from here unless you pick another reference below"></label>
+        <label>North-east grid square (watch area) <input id="st-grid2" maxlength="10" placeholder="GK03ff (Bathsheba)" autocomplete="off" title="Optional: the opposite corner of the area the station watches"></label>
+        <label>Bearings measured from <select id="st-origin" title="Reference point for bearing and range on the radar, map and alerts"><option value="sw">South-west square (my location)</option><option value="centre">Centre of the area</option><option value="ne">North-east square</option></select></label>
+        <label>Station MMSI <input id="st-mmsi" inputmode="numeric" maxlength="9" placeholder="as programmed in the UM435" autocomplete="off" title="Calls addressed to this MMSI are flagged as calls for you"></label>
         <div class="row"><button class="btn primary" type="submit">Save station</button><button id="st-ip" class="btn" type="button">Use my internet location</button></div>
         <p id="st-msg" class="small"></p>
       </form>
       <form id="cfg-form" class="card grid">
         <h2>Data sources</h2>
         <label>Relay server <input id="cfg-relay" placeholder="(this website)" autocomplete="off"></label>
-        <label>Station receiver (LAN, optional) <input id="cfg-rx" placeholder="ws://192.168.1.50:8765" autocomplete="off"></label>
+        <label>Station receiver (LAN, optional) <input id="cfg-rx" placeholder="ws://192.168.1.50:8765" autocomplete="off" title="The station helper on the local network: live RF and IC-9100 scan control"></label>
         <label>NOAA NDBC buoy <input id="cfg-buoy" maxlength="5" placeholder="41040" autocomplete="off"></label>
         <label>METAR station <input id="cfg-metar" maxlength="4" placeholder="TBPB" autocomplete="off"></label>
         <label class="check"><input id="cfg-alarm" type="checkbox"> Sound an alarm for distress alerts</label>

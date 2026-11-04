@@ -15,8 +15,11 @@ jobs:
       - run: npm install --no-audit --no-fund
       - name: Decoder + relay tests (AIS, DSC, NAVTEX, 406 MHz, grid squares, bearings, weather)
         run: npm test
-      - name: Station helper compiles
-        run: python -m py_compile helper/marine_helper.py && python helper/marine_helper.py --help
+      - name: Software receiver tests (DSC + AIS decoded from synthetic IC-9100 audio, CI-V, scan plans)
+        run: |
+          pip install numpy
+          python -m unittest discover -s tests -p 'test_dsp.py' -v
+          python -m py_compile helper/*.py && python helper/marine_helper.py --help
       - name: Browser test (radar, map, GMDSS, weather, day/night faceplates)
         shell: bash
         run: |

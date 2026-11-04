@@ -4,7 +4,10 @@
 Runs at the coastal station on a PC or Raspberry Pi next to the receivers. It collects:
   * NMEA over UDP (default port 10110) — AIS from AIS-catcher / rtl_ais, DSC ($--DSC) from a
     marine VHF/DSC radio or a DSC decoder, anything else that speaks NMEA 0183;
-  * NMEA from a serial port (e.g. a DSC radio or dAISy AIS receiver) with --serial;
+  * NMEA from a serial port with --serial: the Uniden UM435 (DSC Class D, Ch 70 watch) sends $CDDSC/$CDDSE
+    at 4800 baud from its NMEA OUT wires (use a USB-to-RS422/NMEA adapter);
+  * the Icom IC-9100 as a software receiver with --rig ic9100: Marine Monitor tunes it over CI-V and
+    decodes its USB audio itself (AIS 1/2 scan or single channel, VHF DSC Ch 70, MF/HF DSC);
   * decoded text from NAVTEX / Inmarsat-C EGC / 406 MHz decoders, appended to text files
     (--navtex-file, --egc-file, --epirb-file) by those programs;
 and sends it to:
@@ -15,7 +18,8 @@ It never transmits on any radio. Python 3.9+. Optional: `pip install websockets 
 
 Typical receiver chains (any one is enough to start):
   AIS (2 channels, one RTL-SDR):   AIS-catcher -d:0 -u 127.0.0.1 10110
-  DSC Ch 70:                       a DSC-capable marine VHF's NMEA OUT  ->  --serial /dev/ttyUSB0 --baud 4800
+  Band A, DSC Ch 70 (Uniden UM435):   --serial COM3 --baud 4800
+  Band B, Icom IC-9100 (USB cable):   --rig ic9100 --civ-port COM4 --audio "USB Audio CODEC" --mode ais-scan
   NAVTEX 518 kHz:                  an HF SDR (RTL-SDR Blog V4 / SDRplay) + a NAVTEX decoder writing text to navtex.txt
   406 MHz EPIRB/PLB bursts:        RTL-SDR + a 406 decoder writing beacon hex IDs to epirb.txt
   Inmarsat-C EGC SafetyNET:        L-band antenna + LNA + SDR + an EGC decoder writing messages to egc.txt
@@ -31,6 +35,7 @@ class Hub:
         self.relay, self.feed_key = relay, feed_key
         self.lines, self.alerts = [], []
         self.bands = {}  # channel name -> {"live": bool, "count": n, "last": t}
+        self.rx = None   # SoftReceiver when an IC-9100 is attached
 
     def heard(self, band):
         b = self.bands.setdefault(band, {"live": False, "count": 0, "last": 0})
@@ -42,15 +47,20 @@ class Hub:
             try: await ws.send(msg)
             except Exception: self.clients.discard(ws)
 
-    async def nmea(self, line):
+    async def nmea(self, line, band=None, extra=None):
         line = line.strip()
         if not line or line[0] not in "!$": return
-        if "VDM" in line[:7] or "VDO" in line[:7]:
+        if band: self.heard(band)
+        elif "VDM" in line[:7] or "VDO" in line[:7]:
             self.heard("AIS 1 (Ch 87B)" if ",A," in line[:20] else "AIS 2 (Ch 88B)")
-        elif line[3:6] == "DSC":
-            self.heard("DSC Ch 70")
-        self.lines.append(line)
-        await self.broadcast({"type": "nmea", "line": line})
+        elif line[3:6] in ("DSC", "DSE"):
+            self.heard("DSC Ch 70 (UM435)")
+        if line[3:6] == "DSE": return  # position extension: the app shows DSC positions already
+        if line[3:6] == "DSC" and extra and extra.get("to"):
+            self.alerts.append({"kind": "dsc", "line": line, "to": extra["to"], "freq": extra.get("freq")})
+        else:
+            self.lines.append(line)
+        await self.broadcast({"type": "nmea", "line": line, **({"to": extra.get("to"), "freq": extra.get("freq")} if extra else {})})
 
     async def alert(self, kind, **fields):
         band = {"navtex": "NAVTEX (international)", "egc": "Inmarsat-C EGC SafetyNET", "epirb": "EPIRB / PLB (COSPAS-SARSAT)"}[kind]
@@ -63,15 +73,26 @@ class Hub:
         while True:
             now = time.time()
             for b in self.bands.values(): b["live"] = now - b["last"] < 600
-            await self.broadcast({"type": "status", "bands": self.bands})
+            await self.broadcast(self.status())
             await asyncio.sleep(10)
+
+    def status(self):
+        return {"type": "status", "bands": self.bands, "rx": self.rx.status() if self.rx else None}
+
+    async def command(self, msg):
+        """From the app on the local network: change the IC-9100 scan plan. Receive-side only."""
+        if msg.get("type") == "tune" and self.rx:
+            try: await asyncio.to_thread(self.rx.set_mode, str(msg.get("mode")), msg.get("dwell"))
+            except ValueError: return
+            await self.broadcast(self.status())
 
     async def push_loop(self):
         """Send what was heard to the relay every few seconds (only if a relay and key are set)."""
         while self.relay and self.feed_key:
             await asyncio.sleep(5)
-            if not self.lines and not self.alerts: continue
-            body = json.dumps({"lines": self.lines[:2000], "alerts": self.alerts[:200]}).encode()
+            if not self.lines and not self.alerts and int(time.time()) % 60 > 5: continue
+            st = self.status()
+            body = json.dumps({"lines": self.lines[:2000], "alerts": self.alerts[:200], "bands": st["bands"], "rx": st["rx"]}).encode()
             self.lines, self.alerts = self.lines[2000:], self.alerts[200:]
             req = urllib.request.Request(self.relay.rstrip("/") + "/api/feed", data=body, method="POST",
                                          headers={"content-type": "application/json", "x-feed-key": self.feed_key})
@@ -126,12 +147,30 @@ async def main():
     ap.add_argument("--relay", help="Marine Monitor relay URL, e.g. https://marine-monitor.onrender.com")
     ap.add_argument("--feed-key", default=os.environ.get("FEED_KEY"), help="the relay's FEED_KEY")
     ap.add_argument("--navtex-file"); ap.add_argument("--egc-file"); ap.add_argument("--epirb-file")
+    ap.add_argument("--rig", choices=["ic9100", "none"], default="none", help="radio used as a software receiver (Band B)")
+    ap.add_argument("--civ-port", help="IC-9100 CI-V port, e.g. COM4 or /dev/ttyUSB1 (omit for audio only)")
+    ap.add_argument("--civ-baud", type=int, default=19200); ap.add_argument("--civ-addr", default="0x7C")
+    ap.add_argument("--audio", help="sound device name/number of the radio's USB audio (default: system default)")
+    ap.add_argument("--audio-channel", type=int, default=0, help="0 = left/main, 1 = right")
+    ap.add_argument("--mode", default="ais-scan", help="ais-scan | ais-a | ais-b | dsc70 | ais-dsc | hf-dsc")
+    ap.add_argument("--dwell", type=float, default=20, help="seconds on each channel when scanning")
     a = ap.parse_args()
     hub = Hub(a.relay, a.feed_key)
     loop = asyncio.get_running_loop()
     await loop.create_datagram_endpoint(lambda: Udp(hub), local_addr=("0.0.0.0", a.udp))
     tasks = [hub.status_loop(), hub.push_loop()]
     if a.serial: tasks.append(serial_reader(hub, a.serial, a.baud))
+    if a.rig == "ic9100":
+        import threading
+        from icom_civ import Rig
+        from receiver import SoftReceiver, run_audio
+        rig = Rig(a.civ_port, a.civ_baud, int(a.civ_addr, 0))
+        if a.civ_port: rig.main_band()
+        emit = lambda line, band, extra=None: asyncio.run_coroutine_threadsafe(hub.nmea(line, band, extra), loop)
+        hub.rx = SoftReceiver(emit, rig=rig, mode=a.mode, dwell=a.dwell)
+        dev = int(a.audio) if a.audio and a.audio.isdigit() else a.audio
+        threading.Thread(target=run_audio, args=(hub.rx, dev, a.audio_channel), daemon=True).start()
+        print(f"IC-9100 software receiver: {hub.rx.status()['modeName']}")
     if a.navtex_file: tasks.append(follow(a.navtex_file, lambda t: hub.alert("navtex", text=t) if "ZCZC" in t else asyncio.sleep(0), split_on="NNNN"))
     if a.egc_file: tasks.append(follow(a.egc_file, lambda t: hub.alert("egc", text=t.strip()) if t.strip() else asyncio.sleep(0)))
     async def epirb_line(t):
@@ -143,14 +182,21 @@ async def main():
             import websockets
             async def handler(ws, *_):
                 hub.clients.add(ws)
-                try: await ws.wait_closed()
+                await ws.send(json.dumps(hub.status()))
+                try:
+                    async for raw in ws:
+                        try: await hub.command(json.loads(raw))
+                        except (ValueError, TypeError, AttributeError): pass
                 finally: hub.clients.discard(ws)
-            tasks.append(websockets.serve(handler, "0.0.0.0", a.ws))
+            async def ws_server():
+                async with websockets.serve(handler, "0.0.0.0", a.ws, max_size=4096):
+                    await asyncio.Future()
+            tasks.append(ws_server())
             print(f"App connection: ws://{socket.gethostbyname(socket.gethostname())}:{a.ws}")
         except ImportError:
             print("pip install websockets to let the app connect on the local network", file=sys.stderr)
     print(f"Listening for NMEA on UDP {a.udp}" + (f", pushing to {a.relay}" if a.relay and a.feed_key else ""))
-    await asyncio.gather(*[t if asyncio.iscoroutine(t) else asyncio.ensure_future(t) for t in tasks])
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 // Marine Monitor — coast-watch receiver display. Receive-only.
-import { gridToLatLon, latLonToGrid, bearing, distanceNm, destination, cpa, compass, fmtLat, fmtLon } from './lib/geo.js';
-import { AisDecoder, mmsiKind, mmsiCountry } from './lib/ais.js';
-import { parseDsc, parseNavtex, parseBeaconHex } from './lib/gmdss.js';
+import { gridToLatLon, gridBounds, latLonToGrid, bearing, distanceNm, destination, cpa, compass, fmtLat, fmtLon } from './lib/geo.js';
+import { AisDecoder, mmsiKind, mmsiCountry, mmsiDecode } from './lib/ais.js';
+import { parseDsc, parseNavtex, parseBeaconHex, buildDscCall } from './lib/gmdss.js';
 import { Radar } from './lib/radar.js';
 
 const $ = (s) => document.querySelector(s);
@@ -19,9 +19,24 @@ const localTime = (iso) => { const d = new Date(/Z$|[+-]\d\d:?\d\d$/.test(iso) ?
 
 // ---------------------------------------------------------------- settings
 const hosted = /^https?:$/.test(location.protocol) && !['localhost', ''].includes(location.hostname);
-const DEFAULTS = { call: '8PFX', name: 'Ocean City', grid: '', lat: null, lon: null, relay: hosted ? '' : 'https://marine-monitor.onrender.com', rx: '', buoy: '41040', metar: 'TBPB', alarm: true, demo: false, face: 'day', range: 24 };
+const DEFAULTS = { call: '8PFX', name: 'Ocean City', grid: 'GK03ec', grid2: 'GK03ff', origin: 'sw', mmsi: '', aisSrc: 'both', dscSrc: 'both', lat: null, lon: null, relay: hosted ? '' : 'https://marine-monitor.onrender.com', rx: '', buoy: '41040', metar: 'TBPB', alarm: true, demo: false, face: 'day', range: 24 };
 const S = { ...DEFAULTS, ...store.get('mm-settings', {}) };
 const save = () => store.set('mm-settings', S);
+/** Station reference point and watch area from the SW and NE grid squares (default GK03ec Bridgetown → GK03ff Bathsheba). */
+function area() {
+  try {
+    const a = gridBounds(S.grid), b = S.grid2 ? gridBounds(S.grid2) : a;
+    return { s: Math.min(a.s, b.s), w: Math.min(a.w, b.w), n: Math.max(a.n, b.n), e: Math.max(a.e, b.e) };
+  } catch { return null; }
+}
+function computeStation() {
+  try {
+    const sw = gridToLatLon(S.grid), ne = S.grid2 ? gridToLatLon(S.grid2) : sw;
+    const p = S.origin === 'ne' ? ne : S.origin === 'centre' ? { lat: (sw.lat + ne.lat) / 2, lon: (sw.lon + ne.lon) / 2 } : sw;
+    S.lat = p.lat; S.lon = p.lon;
+  } catch { /* typed location (internet) kept */ }
+}
+if (S.lat == null && S.grid) computeStation();
 const station = () => (S.lat != null ? { lat: S.lat, lon: S.lon } : null);
 const api = (p) => `${(S.relay || '').replace(/\/$/, '')}${p}`;
 
@@ -35,7 +50,8 @@ $('#face-night').addEventListener('click', () => { S.face = 'night'; save(); app
 
 function stationLine() {
   const s = station();
-  $('#station-line').textContent = s ? `${S.call} ${S.name} · ${S.grid || latLonToGrid(s.lat, s.lon)} · ${fmtLat(s.lat)} ${fmtLon(s.lon)}` : `${S.call} ${S.name} · set the grid square in Settings`;
+  const g = S.grid ? `${S.grid}${S.grid2 && S.grid2 !== S.grid ? `–${S.grid2}` : ''}` : latLonToGrid(s?.lat || 0, s?.lon || 0);
+  $('#station-line').textContent = s ? `${S.call} ${S.name} · ${g} · ${fmtLat(s.lat)} ${fmtLon(s.lon)}` : `${S.call} ${S.name} · set the grid square in Settings`;
 }
 
 // ---------------------------------------------------------------- tabs
@@ -67,7 +83,8 @@ function merged() {
   }
   if (S.demo) for (const d of demoTargets()) out.set(d.mmsi, d);
   const st = station();
-  const list = [...out.values()].filter((s) => s.lat != null);
+  const want = S.aisSrc === 'internet' ? ['internet'] : S.aisSrc === 'rf' ? ['rf'] : ['internet', 'rf'];
+  const list = [...out.values()].map((s) => ({ ...s, sources: s.sources.filter((x) => want.includes(x)) })).filter((s) => s.lat != null && s.sources.length);
   for (const s of list) {
     s.alarm = ['AIS-SART', 'MOB device', 'EPIRB-AIS'].includes(s.kind);
     if (st) { s.brg = bearing(st, s); s.rng = distanceNm(st, s); const c = cpa(st, s); s.cpa = c && c.tcpaMin > 0 ? c.cpaNm : null; s.tcpa = c && c.tcpaMin > 0 ? c.tcpaMin : null; }
@@ -90,6 +107,7 @@ async function loadShips() {
     const j = await r.json();
     ships.clear(); for (const s of j.ships) ships.set(s.mmsi, s);
     aisState = j.ais; rfFeedAt = j.rfFeed;
+    if (!rxWs && j.rfStatus) { rxStatus = j.rfStatus; renderRx(); }
   } catch { aisState = { error: 'Can’t reach the Marine Monitor relay' }; }
   refreshTargets();
 }
@@ -100,7 +118,7 @@ function refreshTargets() {
   radar?.setTargets(list);
   $('#tcount').textContent = `(${list.length})`;
   const net = list.filter((s) => s.sources.includes('internet')).length, rf = list.filter((s) => s.sources.includes('rf')).length;
-  $('#ais-status').textContent = `Internet AIS: ${aisState?.connected ? `live · ${net} ships` : aisState?.error || 'connecting…'} · Direct RF: ${rf ? `${rf} ships` : rfFeedAt || rxWs ? 'no ships heard yet' : 'no receiver connected'}${S.demo ? ' · DEMO targets shown' : ''}`;
+  $('#ais-status').textContent = `Showing: ${{ internet: 'internet AIS only', rf: 'direct RF only', both: 'internet + RF' }[S.aisSrc]} · Internet AIS: ${aisState?.connected ? `live · ${net} ships` : aisState?.error || 'connecting…'} · Direct RF: ${rf ? `${rf} ships` : rfFeedAt || rxWs ? 'no ships heard yet' : 'no receiver connected'}${S.demo ? ' · DEMO targets shown' : ''}`;
   $('#tlist tbody').replaceChildren(...list.slice(0, 200).map((s) => el('tr', { class: `${s.mmsi === selected ? 'sel' : ''} ${s.alarm ? 'alarm' : ''}`, onclick: () => pick(s.mmsi) },
     el('td', {}, (s.name || String(s.mmsi)) + (s.demo ? ' ' : ''), s.demo ? el('span', { class: 'demo-tag', text: 'DEMO' }) : null),
     el('td', { class: 'num', text: n1(s.brg, 0) }), el('td', { class: 'num', text: n1(s.rng) }), el('td', { class: 'num', text: n1(s.sog) }), el('td', { class: 'num', text: n1(s.cog, 0) }),
@@ -146,6 +164,8 @@ function updateMap(list) {
   const st = station();
   if (st) {
     L.circleMarker([st.lat, st.lon], { radius: 6, color: '#000', fillColor: '#ffe066', fillOpacity: 1 }).bindTooltip(`${S.call} ${S.name}`).addTo(stationLayer);
+    const ar = area();
+    if (ar) L.rectangle([[ar.s, ar.w], [ar.n, ar.e]], { color: '#ffe066', weight: 1.5, fill: false }).bindTooltip(`Watch area ${S.grid}${S.grid2 ? `–${S.grid2}` : ''}`).addTo(stationLayer);
     for (const nm of [S.range / 2, S.range]) L.circle([st.lat, st.lon], { radius: nm * 1852, color: '#46e0b4', weight: 1, fill: false, dashArray: '4 6' }).addTo(stationLayer);
   }
   for (const s of list) {
@@ -164,7 +184,7 @@ async function loadAlerts() {
   renderAlerts();
 }
 function alertTitle(a) {
-  if (a.kind === 'dsc') return `DSC ${a.category}${a.nature ? ` · ${a.nature}` : ''}`;
+  if (a.kind === 'dsc') return `DSC ${a.format && !/Distress/.test(a.format) ? `${a.format} · ` : ''}${a.category}${a.nature ? ` · ${a.nature}` : ''}`;
   if (a.kind === 'ais') return `${a.device || 'AIS'} · ${a.text || ''}`;
   if (a.kind === 'navtex') return `NAVTEX ${a.code || a.station + a.number} · ${a.subject}`;
   if (a.kind === 'epirb') return `406 MHz beacon · ${a.type} · ${a.countryName}`;
@@ -173,14 +193,17 @@ function alertTitle(a) {
 }
 let alarmedIds = new Set(store.get('mm-alarmed', []));
 function renderAlerts() {
-  const all = [...localAlerts, ...alerts].sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 150);
+  const dscOk = (a, local) => a.kind !== 'dsc' || S.dscSrc === 'both' || (S.dscSrc === 'rf') === local;
+  const all = [...localAlerts.filter((a) => dscOk(a, true)), ...alerts.filter((a) => dscOk(a, false))].sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 150);
+  watchCalls([...localAlerts, ...alerts]);
   const st = station();
   $('#alerts').replaceChildren(...(all.length ? all.map((a) => {
     const pos = a.position || (a.lat != null ? { lat: a.lat, lon: a.lon } : null);
     const where = pos ? `${fmtLat(pos.lat)} ${fmtLon(pos.lon)}${st ? ` · ${Math.round(bearing(st, pos))}° T ${n1(distanceNm(st, pos))} NM from ${S.call}` : ''}` : '';
     return el('li', { class: a.level },
       el('div', {}, el('span', { class: 'lv', text: `${LEVEL[a.level] || a.level} ` }), document.createTextNode(alertTitle(a))),
-      el('div', { class: 'meta', text: [a.mmsi ? `MMSI ${a.mmsi}${a.country ? ` (${a.country})` : ''}` : '', a.hex ? `Beacon ${a.hex}` : '', where, a.time || '', a.src === 'rf' ? 'direct RF' : a.src === 'internet' ? 'internet AIS' : '', a.at ? new Date(a.at).toLocaleString() : '', a.count > 1 ? `×${a.count}` : ''].filter(Boolean).join(' · ') }),
+      forMe(a) ? el('div', { class: 'forme', text: `▶ Call for ${forMe(a)}` }) : null,
+      el('div', { class: 'meta', text: [a.mmsi ? `From MMSI ${a.mmsi}${a.country ? ` (${a.country})` : ''}` : '', a.to ? `to ${a.to}${dirName(a.to) ? ` (${dirName(a.to)})` : ''}` : '', a.channel || '', a.telecommand || '', a.ack || '', a.hex ? `Beacon ${a.hex}` : '', where, a.time || '', a.src === 'rf' ? 'direct RF' : a.src === 'internet' ? 'internet AIS' : '', a.at ? new Date(a.at).toLocaleString() : '', a.count > 1 ? `×${a.count}` : ''].filter(Boolean).join(' · ') }),
       a.body ? el('pre', { text: a.body }) : null);
   }) : [el('li', { class: 'muted', text: 'No alerts heard. Distress, urgency and safety calls from DSC, AIS-SART/MOB/EPIRB, NAVTEX, 406 MHz beacons and SafetyNET appear here.' })]));
   const live = all.filter((a) => a.level === 'distress' && Date.now() - (a.last || a.at || 0) < 2 * 3600e3);
@@ -257,15 +280,29 @@ function drawTide() {
 addEventListener('resize', () => drawTide());
 
 // ---------------------------------------------------------------- receiver (dual band)
-const BAND_A = [['AIS 1 (Ch 87B)', '161.975 MHz'], ['AIS 2 (Ch 88B)', '162.025 MHz'], ['DSC Ch 70', '156.525 MHz'], ['Ch 16 distress (listen)', '156.800 MHz'], ['Ch 13 bridge-to-bridge', '156.650 MHz']];
-const BAND_B = [['MF DSC', '2187.5 kHz'], ['HF DSC', '4207.5 · 6312 · 8414.5 · 12577 · 16804.5 kHz'], ['NAVTEX (international)', '518 kHz'], ['NAVTEX (national)', '490 kHz'], ['HF NBDP MSI', '4209.5 kHz'], ['EPIRB / PLB (COSPAS-SARSAT)', '406.0–406.1 MHz'], ['Homing', '121.5 MHz'], ['Inmarsat-C EGC SafetyNET', '1537–1545 MHz (L-band)']];
+const BAND_A = [['DSC Ch 70 (UM435)', '156.525 MHz · constant DSC watch'], ['Ch 16 distress (listen on the UM435)', '156.800 MHz']];
+const BAND_B = [['AIS 1 (Ch 87B)', '161.975 MHz · FM'], ['AIS 2 (Ch 88B)', '162.025 MHz · FM'], ['DSC Ch 70 (IC-9100)', '156.525 MHz · FM (backup to the UM435)'],
+  ...[2187.5, 4207.5, 6312, 8414.5, 12577, 16804.5].map((k) => [`HF DSC ${k} kHz`, `USB, dial ${(k - 1.7).toFixed(1)} kHz`])];
+const BAND_C = [['NAVTEX (international)', '518 kHz'], ['NAVTEX (national)', '490 kHz'], ['EPIRB / PLB (COSPAS-SARSAT)', '406.0–406.1 MHz'], ['Homing', '121.5 MHz'], ['Inmarsat-C EGC SafetyNET', '1537–1545 MHz (L-band)']];
+const RX_MODES = [['ais-scan', 'AIS scan', 'Alternate AIS 1 (87B) and AIS 2 (88B)'], ['ais-a', 'AIS 1', 'Ch 87B only'], ['ais-b', 'AIS 2', 'Ch 88B only'], ['dsc70', 'DSC 70', 'VHF DSC Ch 70 only'], ['ais-dsc', 'AIS + DSC', 'AIS 1 → AIS 2 → DSC 70 in turn'], ['hf-dsc', 'HF DSC', 'MF/HF DSC distress frequencies in turn']];
 let rxWs = null, rxStatus = null;
 function renderRx() {
   const heard = (k) => rxStatus?.bands?.[k];
-  const li = ([n, f]) => { const h = heard(n); return el('li', {}, el('div', {}, el('div', { text: n }), el('div', { class: 'f', text: f })), el('span', { class: `st ${h?.live ? 'live' : ''}`, text: h?.live ? `live${h.count ? ` · ${h.count}` : ''}` : rxWs || rfFeedAt ? 'idle' : 'no receiver' })); };
-  $('#band-a').replaceChildren(...BAND_A.map(li)); $('#band-b').replaceChildren(...BAND_B.map(li));
-  $('#rx-status').textContent = rxWs ? `Connected to the station receiver at ${S.rx}.` : rfFeedAt ? `Station receiver reporting through the relay (last ${new Date(rfFeedAt).toLocaleTimeString()}).` : 'No station receiver connected yet: internet AIS and weather work now; direct RF needs the receiver kit below.';
+  const cur = rxStatus?.rx;
+  const li = ([n, f]) => { const h = heard(n), on = cur?.channel === n; return el('li', { class: on ? 'tuned' : '' }, el('div', {}, el('div', { text: `${on ? '▶ ' : ''}${n}` }), el('div', { class: 'f', text: f })), el('span', { class: `st ${h?.live ? 'live' : ''}`, text: h?.live ? `live${h.count ? ` · ${h.count}` : ''}` : rxWs || rfFeedAt ? 'idle' : 'no receiver' })); };
+  $('#band-a').replaceChildren(...BAND_A.map(li)); $('#band-b').replaceChildren(...BAND_B.map(li)); $('#band-c').replaceChildren(...BAND_C.map(li));
+  $('#rx-modes').replaceChildren(...RX_MODES.map(([v, label, tip]) => el('button', { type: 'button', class: cur?.mode === v || (!cur && S.rxMode === v) ? 'on' : '', text: label, title: `${tip}${rxWs ? '' : ' (connect to the station helper on the local network to change)'}`, disabled: !rxWs, onclick: () => tune(v) })));
+  if (cur?.dwell) $('#rx-dwell').value = cur.dwell;
+  $('#rx-dwell').disabled = !rxWs;
+  $('#rx-now').textContent = cur ? `IC-9100: ${cur.modeName} · now on ${cur.channel}${cur.freq ? ` (${(cur.freq / 1e6).toFixed(cur.freq < 30e6 ? 4 : 3)} MHz)` : ''}` : 'IC-9100 not reporting yet.';
+  $('#rx-status').textContent = rxWs ? `Connected to the station receiver at ${S.rx}.` : rfFeedAt ? `Station receiver reporting through the relay (last ${new Date(rfFeedAt).toLocaleTimeString()}). Scan control works on the station's local network.` : 'No station receiver connected yet: internet AIS and weather work now; direct RF needs the station helper (see below).';
 }
+function tune(mode) {
+  if (!rxWs) return;
+  S.rxMode = mode; save();
+  rxWs.send(JSON.stringify({ type: 'tune', mode, dwell: +$('#rx-dwell').value || 20 }));
+}
+$('#rx-dwell').addEventListener('change', () => { if (rxStatus?.rx?.mode) tune(rxStatus.rx.mode); });
 function connectRx() {
   try { rxWs?.close(); } catch { /* ignore */ }
   rxWs = null; renderRx();
@@ -280,7 +317,7 @@ function connectRx() {
       const a = decoder.push(m.line);
       if (a?.mmsi && a.lat != null) { localRf.set(a.mmsi, { ...(localRf.get(a.mmsi) || {}), ...a, age: 0 }); refreshTargets(); }
       else if (a?.mmsi) { const o = localRf.get(a.mmsi); if (o) Object.assign(o, a); }
-      const d = parseDsc(m.line); if (d) { localAlerts.unshift({ ...d, at: Date.now(), id: `l${Date.now()}`, src: 'rf' }); renderAlerts(); }
+      const d = parseDsc(m.line); if (d) { localAlerts.unshift({ ...d, to: m.to || null, at: Date.now(), id: `l${Date.now()}${Math.random()}`, src: 'rf' }); renderAlerts(); }
       if (a?.distress) { localAlerts.unshift({ kind: 'ais', level: 'distress', mmsi: String(a.mmsi), device: a.kind, text: a.safetyText || `${a.kind} active`, lat: a.lat, lon: a.lon, at: Date.now(), id: `l${a.mmsi}`, src: 'rf' }); renderAlerts(); }
     }
     if (m.type === 'alert') {
@@ -292,17 +329,20 @@ function connectRx() {
 
 // ---------------------------------------------------------------- settings forms
 function fillForms() {
-  $('#st-call').value = S.call; $('#st-name').value = S.name; $('#st-grid').value = S.grid || '';
+  $('#st-call').value = S.call; $('#st-name').value = S.name; $('#st-grid').value = S.grid || ''; $('#st-grid2').value = S.grid2 || ''; $('#st-origin').value = S.origin || 'sw'; $('#st-mmsi').value = S.mmsi || '';
   $('#cfg-relay').value = S.relay; $('#cfg-rx').value = S.rx; $('#cfg-buoy').value = S.buoy; $('#cfg-metar').value = S.metar; $('#cfg-alarm').checked = S.alarm; $('#cfg-demo').checked = S.demo;
 }
 $('#st-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const msg = $('#st-msg');
   try {
-    const grid = $('#st-grid').value.trim();
-    const p = gridToLatLon(grid);
-    Object.assign(S, { call: $('#st-call').value.trim().toUpperCase() || '8PFX', name: $('#st-name').value.trim() || 'Ocean City', grid: grid.slice(0, 4).toUpperCase() + grid.slice(4).toLowerCase(), lat: p.lat, lon: p.lon });
-    save(); stationChanged(); msg.textContent = `Saved: ${fmtLat(p.lat)} ${fmtLon(p.lon)}. Bearings are now from ${S.call}.`;
+    const norm = (g) => g.slice(0, 4).toUpperCase() + g.slice(4).toLowerCase();
+    const grid = $('#st-grid').value.trim(), grid2 = $('#st-grid2').value.trim(), mmsi = $('#st-mmsi').value.replace(/\s/g, '');
+    gridToLatLon(grid); if (grid2) gridToLatLon(grid2);
+    if (mmsi && !/^\d{9}$/.test(mmsi)) throw new Error('The station MMSI is 9 digits');
+    Object.assign(S, { call: $('#st-call').value.trim().toUpperCase() || '8PFX', name: $('#st-name').value.trim() || 'Ocean City', grid: norm(grid), grid2: grid2 ? norm(grid2) : '', origin: $('#st-origin').value, mmsi });
+    computeStation(); save(); stationChanged();
+    msg.textContent = `Saved: bearings from ${{ sw: 'the south-west square', ne: 'the north-east square', centre: 'the centre of the area' }[S.origin]}, ${fmtLat(S.lat)} ${fmtLon(S.lon)}${S.grid2 ? ` · watch area ${S.grid}–${S.grid2}` : ''}.`;
   } catch (err) { msg.textContent = err.message; }
 });
 $('#st-ip').addEventListener('click', async () => {
@@ -310,7 +350,7 @@ $('#st-ip').addEventListener('click', async () => {
   try {
     const j = await (await fetch(api('/api/where'))).json();
     if (j.error) throw new Error(j.error);
-    Object.assign(S, { lat: j.lat, lon: j.lon, grid: latLonToGrid(j.lat, j.lon) });
+    Object.assign(S, { lat: j.lat, lon: j.lon, grid: latLonToGrid(j.lat, j.lon), grid2: '', origin: 'sw' });
     save(); fillForms(); stationChanged();
     msg.textContent = `Approximate location from your internet address: ${j.city ? `${j.city}, ` : ''}${j.country} (${S.grid}). This is only city-level: type the exact grid square for accurate bearings.`;
   } catch (err) { msg.textContent = err.message; }
@@ -322,6 +362,90 @@ $('#cfg-form').addEventListener('submit', (e) => {
 });
 function stationChanged() { stationLine(); radar?.setStation(station()); refreshTargets(); loadWx(); if (map && station()) map.setView([S.lat, S.lon], map.getZoom()); }
 
+// ---------------------------------------------------------------- source switches (AIS / DSC: internet, RF, both)
+function segment(box, key, opts, after) {
+  const draw = () => $(box).replaceChildren(...opts.map(([v, label, tip]) => el('button', { type: 'button', class: S[key] === v ? 'on' : '', text: label, title: tip, onclick: () => { S[key] = v; save(); draw(); after(); } })));
+  draw();
+}
+segment('#ais-src', 'aisSrc', [['internet', 'Internet', 'Ships from internet AIS (AISStream) only'], ['rf', 'RF', 'Ships heard directly by the station receivers only'], ['both', 'Both', 'Merge internet AIS and direct RF']], refreshTargets);
+segment('#dsc-src', 'dscSrc', [['internet', 'Internet', 'DSC calls reported through the relay (from the station, over the internet)'], ['rf', 'RF', 'DSC calls from the station receiver on this local network (UM435 / IC-9100)'], ['both', 'Both', 'All DSC calls']], renderAlerts);
+
+// ---------------------------------------------------------------- MMSI: decoder, directory, individual / group calls
+let dir = store.get('mm-dir', []);
+let calls = store.get('mm-calls', []);
+const dirName = (m) => dir.find((d) => d.mmsi === m)?.name || '';
+const forMe = (a) => (a.kind !== 'dsc' || !a.to ? '' : a.to === S.mmsi ? `${S.call} (this station)` : dir.some((d) => d.mmsi === a.to && d.mmsi.startsWith('0') && !d.mmsi.startsWith('00')) ? `your group ${dirName(a.to)}` : '');
+const notified = new Set(store.get('mm-notified', []));
+function watchCalls(list) {
+  let changed = false;
+  for (const a of list) {
+    if (a.kind !== 'dsc') continue;
+    const id = a.id || `${a.mmsi}|${a.at}`;
+    // acknowledgement of one of our logged calls
+    const c = calls.find((x) => !x.ackAt && x.to === a.mmsi && /Acknowledgement$/.test(a.ack || '') && (a.at || 0) >= x.at - 60e3 && (a.at || 0) - x.at < 15 * 60e3);
+    if (c) { c.ackAt = a.at || Date.now(); changed = true; toast(`✓ ${dirName(c.to) || c.to} acknowledged your call`); }
+    if (forMe(a) && !notified.has(id)) { notified.add(id); toast(`DSC call for ${forMe(a)} from ${a.mmsi}${dirName(a.mmsi) ? ` (${dirName(a.mmsi)})` : ''}${a.channel ? ` · ${a.channel}` : ''}`, 8000); if (S.alarm && (Date.now() - (a.at || 0)) < 10 * 60e3) alarm(); }
+  }
+  store.set('mm-notified', [...notified].slice(-300));
+  if (changed) { store.set('mm-calls', calls); renderCalls(); }
+}
+function decodeMmsi(v) {
+  const d = mmsiDecode(v), out = $('#mmsi-out');
+  if (!d.valid) { out.replaceChildren(el('p', { class: 'small', text: d.error })); return; }
+  const live = merged().find((x) => String(x.mmsi) === d.mmsi);
+  const heard = [...localAlerts, ...alerts].find((a) => a.mmsi === d.mmsi || a.to === d.mmsi);
+  const rows = [['Type', d.kind], ['Format', d.format], ['Country (MID)', d.mid ? `${d.country} · ${d.mid}` : '–'], ['DSC address', d.dscAddress], ['In directory', dirName(d.mmsi) || 'no'],
+    ['On AIS now', live ? `${live.name || 'yes'} · ${Math.round(live.brg)}° T ${n1(live.rng)} NM from ${S.call}` : 'not seen'], ['Last DSC', heard ? `${heard.format || heard.kind} ${heard.category || ''} · ${new Date(heard.at).toLocaleString()}` : 'none heard']];
+  out.replaceChildren(el('dl', { class: 'facts' }, rows.flatMap(([k, val]) => [el('dt', { text: k }), el('dd', { text: val })])), ...d.notes.map((t) => el('p', { class: 'small', text: t })),
+    el('div', { class: 'row' }, el('button', { type: 'button', class: 'btn', text: 'Call this MMSI', title: 'Prepare an individual (or group) DSC call to this MMSI', onclick: () => { setCallType(d.kind === 'Group' ? 'group' : 'individual'); $('#call-to').value = d.mmsi; $('#call-form').scrollIntoView({ behavior: 'smooth' }); } }),
+      el('a', { class: 'btn', href: `https://www.itu.int/mmsapp/ShipStation/list?mmsi=${d.mmsi}`, target: '_blank', rel: 'noopener', text: 'ITU MARS lookup', title: 'Look up the registered ship or station in the ITU database' })));
+}
+$('#mmsi-form').addEventListener('submit', (e) => { e.preventDefault(); decodeMmsi($('#mmsi-in').value); });
+let callType = 'individual';
+function setCallType(t) { callType = t; for (const b of $('#call-type').children) b.classList.toggle('on', b.dataset.v === t); renderDir(); }
+for (const b of $('#call-type').children) b.addEventListener('click', () => setCallType(b.dataset.v));
+const CHANNELS = [['06', 'Ch 06 · ship-to-ship safety'], ['08', 'Ch 08 · ship-to-ship'], ['09', 'Ch 09 · calling'], ['10', 'Ch 10'], ['12', 'Ch 12 · port operations'], ['13', 'Ch 13 · bridge-to-bridge'], ['14', 'Ch 14 · port operations'], ['16', 'Ch 16 · distress, safety, calling'], ['67', 'Ch 67'], ['68', 'Ch 68'], ['69', 'Ch 69'], ['72', 'Ch 72 · ship-to-ship'], ['73', 'Ch 73'], ['77', 'Ch 77 · ship-to-ship']];
+$('#call-ch').replaceChildren(...CHANNELS.map(([v, t]) => el('option', { value: v, text: t })));
+$('#call-ch').value = '72';
+$('#call-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const out = $('#call-out'), to = $('#call-to').value.replace(/\s/g, ''), cat = $('#call-cat').value, ch = $('#call-ch').value;
+  try {
+    if (!/^\d{9}$/.test(S.mmsi || '')) throw new Error('First enter the station MMSI in Settings (the MMSI programmed in the UM435).');
+    const c = buildDscCall({ type: callType, to, from: S.mmsi, category: cat, channel: +ch });
+    const name = dirName(to), d = mmsiDecode(to);
+    const steps = [`On the UM435 open the DSC menu and choose ${callType === 'group' ? 'GROUP CALL' : 'INDIVIDUAL CALL'}.`, `Enter ${callType === 'group' ? 'group ' : ''}MMSI ${to}${name ? ` (${name})` : ''}.`, `Choose ${cat === 'routine' ? 'Routine' : cat === 'safety' ? 'Safety' : 'Urgency'} and working channel ${ch}.`, 'Send. Then press "Log as sent" so Marine Monitor watches for the acknowledgement.'];
+    out.replaceChildren(el('div', { class: 'callcard' },
+      el('div', { class: 'big', text: `${callType === 'group' ? 'Group' : 'Individual'} call → ${name || to}` }),
+      el('p', { class: 'small', text: `${d.kind}${d.country ? ` · ${d.country}` : ''} · ${cat} · working channel ${ch} · from ${S.call} (${S.mmsi})` }),
+      el('p', { class: 'small', text: 'DSC sequence (ITU-R M.493):' }), el('pre', { text: c.text }),
+      el('ol', { class: 'small' }, steps.map((t) => el('li', { text: t }))),
+      el('div', { class: 'row' }, el('button', { type: 'button', class: 'btn primary', text: 'Log as sent', title: 'Record the call; Marine Monitor marks it when the acknowledgement is received', onclick: () => { calls.unshift({ at: Date.now(), type: callType, to, cat, ch, name }); calls = calls.slice(0, 200); store.set('mm-calls', calls); renderCalls(); toast('Call logged: watching for the acknowledgement'); out.replaceChildren(); } }))));
+  } catch (err) { out.replaceChildren(el('p', { class: 'small', text: err.message })); }
+});
+function renderCalls() {
+  $('#call-log').replaceChildren(...(calls.length ? calls.slice(0, 50).map((c) => el('li', { class: c.ackAt ? 'safety' : c.type === 'group' ? 'routine' : 'urgency' },
+    el('div', {}, el('span', { class: 'lv', text: `${c.type === 'group' ? 'Group' : 'Individual'} ` }), document.createTextNode(`→ ${c.name || dirName(c.to) || c.to} (${c.to}) · ${c.cat} · Ch ${c.ch}`)),
+    el('div', { class: 'meta', text: `${new Date(c.at).toLocaleString()} · ${c.type === 'group' ? 'group calls are not acknowledged' : c.ackAt ? `acknowledged ✓ ${new Date(c.ackAt).toLocaleTimeString()}` : Date.now() - c.at < 15 * 60e3 ? 'waiting for acknowledgement…' : 'no acknowledgement heard'}` }))) : [el('li', { class: 'muted', text: 'No calls logged yet.' })]));
+}
+function renderDir() {
+  $('#dir-list').replaceChildren(...dir.filter((d) => (callType === 'group') === (d.mmsi.startsWith('0') && !d.mmsi.startsWith('00'))).map((d) => el('option', { value: d.mmsi, text: d.name })));
+  $('#dir').replaceChildren(...(dir.length ? dir.map((d) => { const k = mmsiDecode(d.mmsi); return el('li', { class: 'routine' },
+    el('div', {}, el('span', { class: 'lv', text: `${d.name} ` }), document.createTextNode(`${d.mmsi} · ${k.kind}${k.country ? ` · ${k.country}` : ''}`)),
+    d.members?.length ? el('div', { class: 'meta', text: `Members: ${d.members.map((m) => dirName(m) || m).join(', ')}` }) : null,
+    el('div', { class: 'row' }, el('button', { type: 'button', class: 'btn', text: 'Call', title: `Prepare a DSC call to ${d.name}`, onclick: () => { setCallType(k.kind === 'Group' ? 'group' : 'individual'); $('#call-to').value = d.mmsi; $('#call-form').scrollIntoView({ behavior: 'smooth' }); } }),
+      el('button', { type: 'button', class: 'btn', text: 'Remove', title: `Remove ${d.name} from the directory`, onclick: () => { dir = dir.filter((x) => x !== d); store.set('mm-dir', dir); renderDir(); } }))); }) : [el('li', { class: 'muted', text: 'Add the ships, coast stations and groups you call often.' })]));
+}
+$('#dir-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const name = $('#dir-name').value.trim(), mmsi = $('#dir-mmsi').value.replace(/\s/g, '');
+  const members = $('#dir-members').value.split(/[,\s]+/).filter((m) => /^\d{9}$/.test(m));
+  if (!name || !/^\d{9}$/.test(mmsi)) { toast('Enter a name and a 9-digit MMSI'); return; }
+  dir = [...dir.filter((d) => d.mmsi !== mmsi), { name, mmsi, members }].sort((a, b) => a.name.localeCompare(b.name));
+  store.set('mm-dir', dir); renderDir(); e.target.reset(); toast(`${name} saved`);
+});
+renderCalls(); renderDir();
+
 // ---------------------------------------------------------------- start
 const RANGES = [3, 6, 12, 24, 48, 96];
 $('#ranges').replaceChildren(...RANGES.map((r) => el('button', { type: 'button', class: r === S.range ? 'on' : '', text: `${r}`, title: `${r} nautical miles`, onclick: (e) => { S.range = r; save(); radar.setRange(r); for (const b of $('#ranges').children) b.classList.toggle('on', b === e.currentTarget); } })));
@@ -332,4 +456,4 @@ function loadAll() { loadShips(); loadAlerts(); loadWx(); loadMsi(); }
 loadAll();
 setInterval(loadShips, 10e3); setInterval(loadAlerts, 15e3); setInterval(loadWx, 10 * 60e3); setInterval(loadMsi, 30 * 60e3);
 setInterval(() => { if (S.demo) refreshTargets(); renderAlerts(); }, 5e3);
-showTab(['radar', 'map', 'alerts', 'wx', 'rx', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : station() ? 'radar' : 'settings');
+showTab(['radar', 'map', 'alerts', 'mmsi', 'wx', 'rx', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : station() ? 'radar' : 'settings');

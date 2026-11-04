@@ -34,7 +34,7 @@ export function createFleet({ now = Date.now, maxAgeMs = 20 * 60e3, max = 8000 }
     return s;
   }
   function addAlert(a) {
-    const key = `${a.kind}|${a.mmsi || a.hex || a.number || ''}|${a.level}|${a.body || a.nature || ''}`.slice(0, 200);
+    const key = `${a.kind}|${a.mmsi || a.hex || a.number || ''}|${a.to || ''}|${a.level}|${a.body || a.nature || ''}|${a.ack || ''}`.slice(0, 200);
     const dup = alerts.find((x) => x.key === key && now() - x.at < 15 * 60e3);
     if (dup) { dup.count = (dup.count || 1) + 1; dup.last = now(); return dup; }
     const rec = { ...a, key, id: crypto.randomBytes(6).toString('base64url'), at: now() };
@@ -129,7 +129,8 @@ export function ingestFeed(fleet, decoder, { lines = [], alerts = [] } = {}) {
     if (dsc) { fleet.addAlert({ ...dsc, src: 'rf' }); n++; }
   }
   for (const a of alerts.slice(0, 200)) {
-    if (a?.kind === 'navtex' && a.text) { const p = parseNavtex(a.text); if (p) { fleet.addAlert({ ...p, freq: a.freq || null, src: 'rf' }); n++; } }
+    if (a?.kind === 'dsc' && a.line) { const d = parseDsc(String(a.line)); if (d) { fleet.addAlert({ ...d, to: /^\d{9}$/.test(String(a.to)) ? String(a.to) : null, freq: Number.isFinite(a.freq) ? a.freq : null, src: 'rf' }); n++; } }
+    else if (a?.kind === 'navtex' && a.text) { const p = parseNavtex(a.text); if (p) { fleet.addAlert({ ...p, freq: a.freq || null, src: 'rf' }); n++; } }
     else if (a?.kind === 'epirb' && a.hex) { const p = parseBeaconHex(a.hex); if (p) { fleet.addAlert({ ...p, lat: a.lat ?? null, lon: a.lon ?? null, src: 'rf' }); n++; } }
     else if (a?.kind === 'egc' && a.text) { fleet.addAlert({ kind: 'egc', level: /MAYDAY|DISTRESS/i.test(a.text) ? 'distress' : /PAN.?PAN|URGENT/i.test(a.text) ? 'urgency' : 'safety', body: String(a.text).slice(0, 4000), service: 'Inmarsat-C SafetyNET', src: 'rf' }); n++; }
   }
@@ -234,7 +235,7 @@ export function startRelay({ port = +process.env.PORT || 8800, host = process.en
   const ais = startAisStream(fleet, { key: aisKey, WebSocketImpl });
   const cache = new Map();
   const cached = async (k, ms, fn) => { const c = cache.get(k); if (c && now() - c.at < ms) return c.v; const v = await fn(); cache.set(k, { at: now(), v }); if (cache.size > 300) cache.delete(cache.keys().next().value); return v; };
-  let lastFeed = 0;
+  let lastFeed = 0, rfStatus = null;
   const files = {};
   const walk = (dir, base = '') => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const r = `${base}/${e.name}`; if (e.isDirectory()) walk(path.join(dir, e.name), r); else if (TYPES[path.extname(e.name)]) files[r] = { type: TYPES[path.extname(e.name)], body: fs.readFileSync(path.join(dir, e.name)) }; } };
   walk(WWW); files['/'] = files['/index.html'];
@@ -253,7 +254,7 @@ export function startRelay({ port = +process.env.PORT || 8800, host = process.en
       if (req.method === 'GET' && p === '/api/status') return send(200, { ais: { enabled: ais.enabled, connected: ais.connected, messages: ais.messages, error: ais.error }, ships: fleet.size(), rfFeed: { last: lastFeed || null, keySet: !!feedKey } });
       if (req.method === 'GET' && p === '/api/ships') {
         const b = (url.searchParams.get('bbox') || '').split(',').map(Number);
-        return send(200, { ships: fleet.list(b.length === 4 && b.every(Number.isFinite) ? b : null), ais: { enabled: ais.enabled, connected: ais.connected, error: ais.error }, rfFeed: lastFeed || null, at: now() });
+        return send(200, { ships: fleet.list(b.length === 4 && b.every(Number.isFinite) ? b : null), ais: { enabled: ais.enabled, connected: ais.connected, error: ais.error }, rfFeed: lastFeed || null, rfStatus: lastFeed && now() - lastFeed < 5 * 60e3 ? rfStatus : null, at: now() });
       }
       if (req.method === 'GET' && p === '/api/alerts') return send(200, { alerts: fleet.alerts(), at: now() });
       if (req.method === 'GET' && p === '/api/msi') {
@@ -281,6 +282,7 @@ export function startRelay({ port = +process.env.PORT || 8800, host = process.en
         for await (const c of req) { size += c.length; if (size > 512 * 1024) return send(413, { error: 'too large' }); chunks.push(c); }
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
         const n = ingestFeed(fleet, decoder, body); lastFeed = now();
+        if (body.bands && typeof body.bands === 'object') rfStatus = { bands: Object.fromEntries(Object.entries(body.bands).slice(0, 40).map(([k, v]) => [String(k).slice(0, 60), { live: !!v?.live, count: +v?.count || 0 }])), rx: body.rx && typeof body.rx === 'object' ? { modeName: String(body.rx.modeName || '').slice(0, 60), channel: String(body.rx.channel || '').slice(0, 60), freq: +body.rx.freq || null } : null };
         return send(200, { ok: true, accepted: n });
       }
       const f = req.method === 'GET' ? files[p] : null;

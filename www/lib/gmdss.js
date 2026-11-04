@@ -3,7 +3,8 @@
 import { mmsiCountry } from './ais.js';
 
 export const DSC_CATEGORY = { '00': 'Routine', '08': 'Safety (Sécurité)', '10': 'Urgency (Pan-Pan)', '12': 'Distress (Mayday)' };
-export const DSC_FORMAT = { '02': 'Geographic area', '12': 'Distress alert', '16': 'All ships', '20': 'Individual', '23': 'Individual (auto)' };
+export const DSC_FORMAT = { '02': 'Geographic area', '12': 'Distress alert', '14': 'Group', '16': 'All ships', '20': 'Individual', '23': 'Individual (auto)' };
+export const DSC_TELECOMMAND = { '00': 'Voice (simplex)', '01': 'Voice (duplex)', '03': 'Polling', '04': 'Unable to comply', '05': 'End of call', '06': 'Data', '09': 'J3E telephone', '10': 'Distress acknowledgement', '12': 'Distress relay', '13': 'Teletype FEC', '15': 'Teletype ARQ', '18': 'Test', '21': 'Position update', '26': 'No information' };
 export const DSC_NATURE = { '00': 'Fire, explosion', '01': 'Flooding', '02': 'Collision', '03': 'Grounding', '04': 'Listing, danger of capsizing', '05': 'Sinking', '06': 'Disabled and adrift', '07': 'Undesignated distress', '08': 'Abandoning ship', '09': 'Piracy / armed robbery', '10': 'Man overboard', '12': 'EPIRB emission' };
 
 /** DSC position field (10 digits: quadrant, lat ddmm, lon dddmm) → { lat, lon } or null. */
@@ -29,6 +30,7 @@ export function parseDsc(line) {
     mmsi: from, country: from ? mmsiCountry(from) : '', nature: distress ? (DSC_NATURE[natDistress || nat] || '') : '',
     position: dscPosition(pos || ''), time: /^\d{4}$/.test(time || '') && time !== '8888' ? `${time.slice(0, 2)}:${time.slice(2)} UTC` : null,
     ack: ack === 'B' ? 'Acknowledgement' : ack === 'R' ? 'Acknowledgement request' : '', expansion: exp === 'E',
+    formatCode: fmt, telecommand: !distress ? DSC_TELECOMMAND[nat] || '' : '', channel: /^90\d{4}$/.test(pos || '') ? `Ch ${+pos.slice(2)}` : null,
   };
   return out;
 }
@@ -57,4 +59,19 @@ export function parseBeaconHex(hex) {
   const proto = userProtocol ? parseInt(bits.slice(11, 14), 2) : parseInt(bits.slice(11, 15), 2);
   const type = userProtocol ? PROTOCOLS_USER[proto] || `User protocol ${proto}` : PROTOCOLS_LOC[proto] || `Location protocol ${proto}`;
   return { kind: 'epirb', hex: h, country, countryName: mmsiCountry(`${country}000000`) || `MID ${country}`, type, test: /test/i.test(type), level: /test/i.test(type) ? 'routine' : 'distress' };
+}
+
+// DSC call builder: the ITU-R M.493 character sequence for an individual or group call. Used to show
+// exactly what the station's DSC radio (the type-approved Uniden UM435) will send. Nothing here transmits.
+export const CATEGORY_SYMBOL = { routine: 100, safety: 108, urgency: 110 };
+const mmsiSymbols = (m) => { const d = `${m}0`; return [0, 2, 4, 6, 8].map((i) => +d.slice(i, i + 2)); };
+export function buildDscCall({ type = 'individual', to, from, category = 'routine', channel = 72 }) {
+  if (!/^\d{9}$/.test(String(to)) || !/^\d{9}$/.test(String(from))) throw new Error('Both MMSIs must be 9 digits');
+  if (type === 'group' && !String(to).startsWith('0')) throw new Error('A group MMSI starts with 0');
+  if (type === 'individual' && String(to).startsWith('0') && !String(to).startsWith('00')) throw new Error('That is a group MMSI: use a group call');
+  const f = type === 'group' ? 114 : 120, cat = CATEGORY_SYMBOL[category] ?? 100, ch = Math.max(1, Math.min(99, Math.round(+channel)));
+  const eos = type === 'individual' ? 117 : 127; // individual calls ask for an acknowledgement
+  const msg = [f, f, ...mmsiSymbols(to), cat, ...mmsiSymbols(from), 100, 126, 90, 0, ch, eos];
+  const ecc = msg.slice(1).reduce((x, v) => x ^ v, 0);
+  return { symbols: [...msg, ecc], format: f, eos, ecc, text: `${f} ${f} | to ${mmsiSymbols(to).map((v) => String(v).padStart(2, '0')).join(' ')} | cat ${cat} | from ${mmsiSymbols(from).map((v) => String(v).padStart(2, '0')).join(' ')} | 100 126 | Ch ${ch} | EOS ${eos} | ECC ${ecc}` };
 }

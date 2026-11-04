@@ -58,11 +58,32 @@ export function mmsiKind(mmsi) {
 }
 /** Country (MID) for common Caribbean / regional MIDs; others shown as the MID number. */
 const MID = { 314: 'Barbados', 362: 'Trinidad & Tobago', 330: 'Grenada', 375: 'St Vincent & Grenadines', 376: 'St Vincent & Grenadines', 377: 'St Vincent & Grenadines', 343: 'St Lucia', 325: 'Dominica', 304: 'Antigua & Barbuda', 305: 'Antigua & Barbuda', 339: 'Jamaica', 312: 'Belize', 750: 'Guyana', 338: 'USA', 366: 'USA', 367: 'USA', 368: 'USA', 369: 'USA', 316: 'Canada', 232: 'UK', 233: 'UK', 234: 'UK', 235: 'UK', 226: 'France', 227: 'France', 228: 'France', 329: 'Guadeloupe', 347: 'Martinique', 244: 'Netherlands', 245: 'Netherlands', 246: 'Netherlands', 306: 'Curaçao / Sint Maarten', 307: 'Aruba', 308: 'Bahamas', 309: 'Bahamas', 311: 'Bahamas', 310: 'Bermuda', 319: 'Cayman Islands', 351: 'Panama', 352: 'Panama', 353: 'Panama', 354: 'Panama', 355: 'Panama', 356: 'Panama', 357: 'Panama', 370: 'Panama', 371: 'Panama', 372: 'Panama', 373: 'Panama', 374: 'Panama', 636: 'Liberia', 637: 'Liberia', 538: 'Marshall Islands', 248: 'Malta', 249: 'Malta', 256: 'Malta', 209: 'Cyprus', 210: 'Cyprus', 212: 'Cyprus', 775: 'Venezuela', 710: 'Brazil', 345: 'Mexico' };
+/** Where the MID (country digits) sits in each kind of MMSI (ITU-R M.585). */
+function midOf(s, k) {
+  return { Ship: s.slice(0, 3), 'Coast station': s.slice(2, 5), Group: s.slice(1, 4), 'Handheld VHF': s.slice(1, 4), 'Craft with parent ship': s.slice(2, 5), 'Aid to navigation': s.slice(2, 5), 'SAR aircraft': s.slice(3, 6) }[k] || null;
+}
 export function mmsiCountry(mmsi) {
   const s = String(mmsi).padStart(9, '0');
-  const k = mmsiKind(mmsi);
-  const mid = k === 'Ship' ? s.slice(0, 3) : k === 'Coast station' ? s.slice(2, 5) : k === 'Handheld VHF' || k === 'Craft with parent ship' ? s.slice(1, 4) : (k === 'SAR aircraft' || k === 'Aid to navigation') ? s.slice(3, 6) : null;
+  const mid = midOf(s, mmsiKind(s));
   return mid ? (MID[+mid] || `MID ${mid}`) : '';
+}
+
+/** Full MMSI breakdown for the MMSI decoder (ITU-R M.585). */
+export function mmsiDecode(input) {
+  const s = String(input || '').replace(/\s/g, '');
+  if (!/^\d{9}$/.test(s)) return { valid: false, error: 'An MMSI is exactly 9 digits.' };
+  const kind = mmsiKind(s), mid = midOf(s, kind), notes = [];
+  const fmt = { Ship: 'MID XXXXXX', 'Coast station': '00 MID XXXX', Group: '0 MID XXXXX', 'Handheld VHF': '8 MID XXXXX', 'Craft with parent ship': '98 MID XXXX', 'Aid to navigation': '99 MID XXXX', 'SAR aircraft': '111 MID XXX', 'AIS-SART': '970 XX YYYY', 'MOB device': '972 XX YYYY', 'EPIRB-AIS': '974 XX YYYY' }[kind];
+  if (kind === 'Ship' && s.endsWith('000')) notes.push('Ends in 000: traditionally a ship that can also be reached through Inmarsat.');
+  if (kind === 'Ship' && !/^[2-7]/.test(s)) notes.push('Ship MMSIs normally start with 2–7: check the number.');
+  if (kind === 'Coast station') notes.push('A coast station: DSC calls to it go to the shore station, not a ship.');
+  if (kind === 'Group') notes.push('A group MMSI: one DSC call reaches every radio programmed with this group number.');
+  if (kind === 'SAR aircraft') notes.push(s[6] === '5' ? 'Search-and-rescue helicopter.' : s[6] === '1' ? 'Search-and-rescue fixed-wing aircraft.' : 'Search-and-rescue aircraft.');
+  if (kind === 'Aid to navigation') notes.push(s[5] === '1' ? 'Physical aid to navigation (buoy, light).' : s[5] === '6' ? 'Virtual aid to navigation (broadcast only).' : 'Aid to navigation.');
+  if (['AIS-SART', 'MOB device', 'EPIRB-AIS'].includes(kind)) notes.push(`Distress device: manufacturer code ${s.slice(3, 5)}, serial ${s.slice(5)}. ${s.slice(5) === '0000' ? '' : 'Treat as a real alert unless it says TEST.'}`.trim());
+  if (kind === 'Handheld VHF') notes.push('Handheld VHF with DSC and GNSS.');
+  if (kind === 'Craft with parent ship') notes.push('Craft (e.g. tender, lifeboat) associated with a parent ship.');
+  return { valid: true, mmsi: s, kind, format: fmt, mid: mid ? +mid : null, country: mid ? (MID[+mid] || `MID ${mid} (not in the local list)`) : '', notes, dscAddress: `${s}0` };
 }
 
 /** Decode one complete AIS payload. */
