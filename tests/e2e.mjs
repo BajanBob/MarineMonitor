@@ -26,7 +26,7 @@ await fetch(`${base}/api/feed`, { method: 'POST', headers: { 'content-type': 'ap
 const browser = await pw.chromium.launch();
 const page = await browser.newPage({ viewport: { width: 412, height: 900 } });
 const errors = []; page.on('pageerror', (e) => errors.push(e.message)); page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|tile/.test(m.text())) errors.push(m.text()); });
-await page.route(/tile\.openstreetmap\.org|openseamap|cartocdn/, (r) => r.abort());
+await page.route(/tile\.openstreetmap\.org|openseamap|arcgisonline/, (r) => r.abort());
 const shot = (n) => (SHOTS ? page.screenshot({ path: path.join(SHOTS, `${n}.png`), fullPage: true }) : null);
 try {
   await page.goto(`${base}/`);

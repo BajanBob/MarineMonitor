@@ -16,8 +16,8 @@ body.night {
 html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 body { padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
 a { color: var(--accent); }
-.top { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 1000; }
-.brand { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 1000; }
+.brand { display: flex; gap: 10px; align-items: center; min-width: 0; flex: 1 1 240px; }
 .logo { width: 38px; height: 38px; color: var(--accent); flex: none; }
 h1 { margin: 0; font-size: 1.2rem; letter-spacing: .02em; }
 .sub { margin: 0; font-size: .82rem; color: var(--muted); font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
@@ -25,7 +25,7 @@ h1 { margin: 0; font-size: 1.2rem; letter-spacing: .02em; }
 .face button, .tabs button, .seg button, .btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--fg); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
 .face button.on, .tabs button.on, .seg button.on { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
 .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
-.tabs { display: flex; gap: 6px; padding: 8px 14px; overflow-x: auto; background: var(--bg); position: sticky; top: 63px; z-index: 999; }
+.tabs { display: flex; gap: 6px; padding: 8px 14px; overflow-x: auto; background: var(--bg); }
 .badge { display: inline-block; min-width: 1.4em; padding: 0 5px; border-radius: 999px; background: var(--alarm); color: #fff; font-size: .75rem; }
 main { padding: 10px 14px 40px; max-width: 1200px; margin: 0 auto; }
 .tab { display: none; } .tab.on { display: block; }
@@ -83,7 +83,7 @@ body.night .leaflet-container { background: #000; }
 code { font-family: ui-monospace, monospace; font-size: .85em; }
 .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 10px 14px; border-radius: 10px; z-index: 2000; max-width: 90vw; }
 .demo-tag { color: var(--warn); font-weight: 700; }
-@media (max-width: 520px) { .face button { padding: 6px 8px; } h1 { font-size: 1.05rem; } .tabs { top: 59px; } }
+@media (max-width: 520px) { .face button { padding: 6px 8px; } h1 { font-size: 1.05rem; } }
 .src-row { align-items: center; margin-bottom: 8px; } .src-row .lbl { font-weight: 600; font-size: .9rem; }
 .seg button:disabled { opacity: .55; cursor: not-allowed; }
 .chans li.tuned { border-color: var(--accent); }
@@ -93,3 +93,4 @@ code { font-family: ui-monospace, monospace; font-size: .85em; }
 .callcard pre { white-space: pre-wrap; font: .82rem/1.35 ui-monospace, monospace; background: var(--bg); padding: 8px; border-radius: 8px; overflow-wrap: anywhere; }
 .facts-box .facts { margin: 6px 0; } a.btn { text-decoration: none; display: inline-block; }
 #band-b { margin-top: 8px; }
+@media (max-width: 600px) { .top { position: static; } }

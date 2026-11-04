@@ -149,9 +149,13 @@ function initMap() {
   const st = station() || { lat: 13.1, lon: -59.6 };
   map = L.map('map').setView([st.lat, st.lon], 9);
   // OpenStreetMap's servers require the website's address (Referer) with every map image. The website sends it;
-  // the installed apps have no web address, so they use CARTO's map of the same OpenStreetMap data instead.
+  // the installed apps have no web address, so they use Esri's Ocean basemap (no key needed).
   if (hosted) L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, referrerPolicy: 'strict-origin-when-cross-origin', attribution: '© OpenStreetMap contributors' }).addTo(map);
-  else L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png', { maxZoom: 18, subdomains: 'abcd', attribution: '© OpenStreetMap contributors © CARTO' }).addTo(map);
+  else {
+    // Esri Ocean basemap: free to view without a key, made for marine use (depths, coastlines, place names).
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', { maxZoom: 16, attribution: 'Tiles © Esri — GEBCO, NOAA, Garmin, HERE, and other contributors' }).addTo(map);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}', { maxZoom: 16 }).addTo(map);
+  }
   L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', { maxZoom: 18, attribution: 'Seamarks © OpenSeaMap' }).addTo(map);
   shipLayer = L.layerGroup().addTo(map); stationLayer = L.layerGroup().addTo(map); lineLayer = L.layerGroup().addTo(map);
   refreshTargets();

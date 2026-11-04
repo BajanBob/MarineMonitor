@@ -227,7 +227,7 @@ export async function getNavWarnings(fetchImpl = globalThis.fetch) {
 
 // ---------------------------------------------------------------- HTTP
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://tile.openstreetmap.org https://*.basemaps.cartocdn.com https://tiles.openseamap.org; connect-src 'self' ws: wss: https:; frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://tile.openstreetmap.org https://server.arcgisonline.com https://tiles.openseamap.org; connect-src 'self' ws: wss: https:; frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
 
 const cleanRig = (r) => (r && typeof r === 'object' ? { rig: String(r.rig || '').slice(0, 12), label: String(r.label || '').slice(0, 20), mode: String(r.mode || '').slice(0, 12), modeName: String(r.modeName || '').slice(0, 60), channel: String(r.channel || '').slice(0, 60), freq: +r.freq || null, dwell: +r.dwell || null } : null);
 export function startRelay({ port = +process.env.PORT || 8800, host = process.env.HOST || '127.0.0.1', fetchImpl = globalThis.fetch, aisKey = process.env.AISSTREAM_KEY || '', feedKey = process.env.FEED_KEY || '', now = Date.now, WebSocketImpl } = {}) {
