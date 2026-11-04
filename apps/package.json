@@ -1,0 +1,37 @@
+{
+  "name": "marine-monitor-apps",
+  "productName": "Marine Monitor",
+  "version": "1.0.0",
+  "description": "Coast-watch receiver: virtual radar, live map, GMDSS alerts and marine weather.",
+  "private": true,
+  "main": "electron/main.cjs",
+  "author": "BajanBob",
+  "license": "MIT",
+  "scripts": {
+    "copy-www": "node scripts/copy-www.mjs",
+    "cap:android": "npm run copy-www && cap add android && node scripts/patch-android.mjs && capacitor-assets generate --iconBackgroundColor '#06141f' --iconBackgroundColorDark '#06141f' --splashBackgroundColor '#06141f' --splashBackgroundColorDark '#06141f' --android && cap sync android",
+    "cap:ios": "npm run copy-www && cap add ios && node scripts/patch-ios.mjs && capacitor-assets generate --iconBackgroundColor '#06141f' --iconBackgroundColorDark '#06141f' --splashBackgroundColor '#06141f' --splashBackgroundColorDark '#06141f' --ios && cap sync ios",
+    "dist:win": "npm run copy-www && electron-builder --win nsis portable --x64 --publish never"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/ios": "^8.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.0.0",
+    "electron": "^37.0.0",
+    "electron-builder": "^26.0.0",
+    "plist": "^3.1.0"
+  },
+  "build": {
+    "appId": "bb.bajanbob.marinemonitor",
+    "productName": "Marine Monitor",
+    "directories": { "output": "release" },
+    "files": ["electron/**", "www/**", "package.json"],
+    "win": { "icon": "assets/icon-only.png" },
+    "portable": { "artifactName": "MarineMonitor-${version}-Portable.${ext}" },
+    "nsis": { "artifactName": "MarineMonitor-${version}-Setup.${ext}", "oneClick": true, "perMachine": false }
+  }
+}

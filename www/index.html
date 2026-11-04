@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Marine Monitor</title>
+  <meta name="theme-color" content="#06141f">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="vendor/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+  <script src="vendor/leaflet.js" defer></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body class="day">
+  <header class="top">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="27" fill="none" stroke="currentColor" stroke-width="3"/><circle cx="32" cy="32" r="16" fill="none" stroke="currentColor" stroke-width="2" opacity=".6"/><path d="M32 32 L52 14" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><circle cx="44" cy="40" r="3" fill="currentColor"/></svg>
+      <div><h1>Marine Monitor</h1><p id="station-line" class="sub">Set your station in Settings</p></div>
+    </div>
+    <div class="face" role="group" aria-label="Faceplate">
+      <button id="face-day" type="button" title="Day faceplate">☀ Day</button>
+      <button id="face-night" type="button" title="Night faceplate: red, protects night vision">◐ Night</button>
+    </div>
+  </header>
+  <div id="distress" class="distress" role="alert" hidden></div>
+
+  <nav class="tabs" role="tablist">
+    <button data-tab="radar" class="on">Radar</button>
+    <button data-tab="map">Map</button>
+    <button data-tab="alerts">GMDSS <span id="alert-count" class="badge" hidden></span></button>
+    <button data-tab="wx">Weather</button>
+    <button data-tab="rx">Receiver</button>
+    <button data-tab="settings">Settings</button>
+  </nav>
+
+  <main>
+    <section id="tab-radar" class="tab on">
+      <div class="radar-wrap">
+        <canvas id="radar" aria-label="Virtual radar: ships around the station by bearing and range"></canvas>
+        <div class="radar-ctl">
+          <span class="lbl">Range</span>
+          <div id="ranges" class="seg"></div>
+          <span class="legend"><i class="k-net"></i>Internet AIS <i class="k-rf"></i>Direct RF <i class="k-both"></i>Both <i class="k-aton"></i>Aid to nav</span>
+        </div>
+      </div>
+      <aside id="target" class="card target"><p class="muted">Tap a target for bearing and range from the station.</p></aside>
+      <div class="card">
+        <h2>Targets <span id="tcount" class="muted"></span></h2>
+        <div class="scroll"><table class="tbl" id="tlist"><thead><tr><th>Name / MMSI</th><th>Brg °T</th><th>Rng NM</th><th>SOG kn</th><th>COG °</th><th>CPA NM</th><th>Src</th></tr></thead><tbody></tbody></table></div>
+        <p id="ais-status" class="muted small"></p>
+      </div>
+    </section>
+
+    <section id="tab-map" class="tab">
+      <div id="map" class="map" aria-label="Live map of ships"></div>
+      <p class="muted small">Map © OpenStreetMap contributors · Seamarks © OpenSeaMap. Not for navigation.</p>
+    </section>
+
+    <section id="tab-alerts" class="tab">
+      <div class="card"><h2>Distress, urgency and safety (Sécurité)</h2><ul id="alerts" class="alerts"></ul></div>
+      <div class="card"><h2>NAVAREA IV navigational warnings <span class="muted small">(NGA, internet)</span></h2><ul id="msi" class="alerts"></ul></div>
+      <div class="card info">
+        <h2>Services and what can be received</h2>
+        <dl class="facts">
+          <dt>DSC (VHF Ch 70, MF/HF)</dt><dd>Distress, urgency and safety calls, from a DSC radio's NMEA output or an SDR decoder at the station.</dd>
+          <dt>AIS-SART, MOB, EPIRB-AIS</dt><dd>Seen directly on AIS and over internet AIS. Shown in red and flashing.</dd>
+          <dt>EPIRB / PLB 406 MHz</dt><dd>Local bursts decoded by the station's receiver: beacon ID, type and country. Alerts are relayed to rescue centres by COSPAS-SARSAT, not by Marine Monitor.</dd>
+          <dt>NAVTEX 518 / 490 kHz</dt><dd>Navigational and weather warnings, received at the station.</dd>
+          <dt>Inmarsat-C SafetyNET</dt><dd>Public maritime safety broadcasts (EGC), from an L-band receiver. Private Inmarsat traffic is not received or decoded.</dd>
+          <dt>SSAS (ship security alert)</dt><dd><strong>Not receivable, by design.</strong> SSAS is covert and goes only to the ship's company and flag state. Marine Monitor doesn't try to detect or intercept it.</dd>
+        </dl>
+      </div>
+    </section>
+
+    <section id="tab-wx" class="tab">
+      <p id="wx-where" class="muted"></p>
+      <div id="wx-tiles" class="tiles"></div>
+      <div class="card"><h2>Tide (sea level, next 36 h)</h2><canvas id="tide" class="tide" aria-label="Tide curve"></canvas><p id="tide-turns" class="small"></p></div>
+      <div class="card"><h2>Observations</h2><div id="obs"></div></div>
+      <p id="wx-src" class="muted small"></p>
+      <p class="muted small">Model tides and currents are about 8 km resolution: <strong>not for navigation</strong>. Use official tide tables and the <a href="https://www.barbadosweather.org" target="_blank" rel="noopener">Barbados Meteorological Services</a> marine forecast.</p>
+    </section>
+
+    <section id="tab-rx" class="tab">
+      <div class="card">
+        <h2>Dual-band receiver</h2>
+        <p id="rx-status" class="muted"></p>
+        <div class="bands">
+          <div class="band"><h3>Band A · VHF marine</h3><ul id="band-a" class="chans"></ul></div>
+          <div class="band"><h3>Band B · MF/HF · UHF · L-band</h3><ul id="band-b" class="chans"></ul></div>
+        </div>
+      </div>
+      <div class="card info">
+        <h2>Setting up direct RF</h2>
+        <ol class="small">
+          <li>At the station, connect a receiver to a PC or Raspberry Pi: an RTL-SDR (AIS, DSC, 406 MHz; NAVTEX needs HF coverage), or a marine VHF/AIS unit with NMEA output.</li>
+          <li>Run <code>helper/marine_helper.py</code>. It takes NMEA from AIS-catcher, rtl_ais, a DSC radio or a NAVTEX/EGC decoder, and sends it to this app and to the relay.</li>
+          <li>Set the receiver address below, or set FEED_KEY so phones anywhere see the station's RF picture through the relay.</li>
+        </ol>
+        <p class="muted small">Receive only. Marine Monitor never transmits.</p>
+      </div>
+    </section>
+
+    <section id="tab-settings" class="tab">
+      <form id="st-form" class="card grid">
+        <h2>Coastal station</h2>
+        <label>Call sign <input id="st-call" maxlength="12" autocomplete="off"></label>
+        <label>Name <input id="st-name" maxlength="40" autocomplete="off"></label>
+        <label>Grid square <input id="st-grid" maxlength="10" placeholder="e.g. GK03ec" autocomplete="off"></label>
+        <div class="row"><button class="btn primary" type="submit">Save station</button><button id="st-ip" class="btn" type="button">Use my internet location</button></div>
+        <p id="st-msg" class="small"></p>
+      </form>
+      <form id="cfg-form" class="card grid">
+        <h2>Data sources</h2>
+        <label>Relay server <input id="cfg-relay" placeholder="(this website)" autocomplete="off"></label>
+        <label>Station receiver (LAN, optional) <input id="cfg-rx" placeholder="ws://192.168.1.50:8765" autocomplete="off"></label>
+        <label>NOAA NDBC buoy <input id="cfg-buoy" maxlength="5" placeholder="41040" autocomplete="off"></label>
+        <label>METAR station <input id="cfg-metar" maxlength="4" placeholder="TBPB" autocomplete="off"></label>
+        <label class="check"><input id="cfg-alarm" type="checkbox"> Sound an alarm for distress alerts</label>
+        <label class="check"><input id="cfg-demo" type="checkbox"> Show demo targets (for training; clearly marked)</label>
+        <div class="row"><button class="btn primary" type="submit">Save</button></div>
+      </form>
+      <p class="muted small">Marine Monitor is a receive-only monitoring aid and <strong>not for navigation</strong>. Internet AIS data © AISStream.io.</p>
+    </section>
+  </main>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>

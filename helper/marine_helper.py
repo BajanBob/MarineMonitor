@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""Marine Monitor station helper — the "direct RF" side. RECEIVE ONLY.
+
+Runs at the coastal station on a PC or Raspberry Pi next to the receivers. It collects:
+  * NMEA over UDP (default port 10110) — AIS from AIS-catcher / rtl_ais, DSC ($--DSC) from a
+    marine VHF/DSC radio or a DSC decoder, anything else that speaks NMEA 0183;
+  * NMEA from a serial port (e.g. a DSC radio or dAISy AIS receiver) with --serial;
+  * decoded text from NAVTEX / Inmarsat-C EGC / 406 MHz decoders, appended to text files
+    (--navtex-file, --egc-file, --epirb-file) by those programs;
+and sends it to:
+  * the Marine Monitor app on the local network over WebSocket (port 8765), and/or
+  * the Marine Monitor relay (--relay URL --feed-key KEY) so phones anywhere see it.
+
+It never transmits on any radio. Python 3.9+. Optional: `pip install websockets pyserial`.
+
+Typical receiver chains (any one is enough to start):
+  AIS (2 channels, one RTL-SDR):   AIS-catcher -d:0 -u 127.0.0.1 10110
+  DSC Ch 70:                       a DSC-capable marine VHF's NMEA OUT  ->  --serial /dev/ttyUSB0 --baud 4800
+  NAVTEX 518 kHz:                  an HF SDR (RTL-SDR Blog V4 / SDRplay) + a NAVTEX decoder writing text to navtex.txt
+  406 MHz EPIRB/PLB bursts:        RTL-SDR + a 406 decoder writing beacon hex IDs to epirb.txt
+  Inmarsat-C EGC SafetyNET:        L-band antenna + LNA + SDR + an EGC decoder writing messages to egc.txt
+"""
+import argparse, asyncio, json, os, re, socket, sys, time, urllib.request
+
+HEX15 = re.compile(r"\b([0-9A-Fa-f]{15})\b")
+
+
+class Hub:
+    def __init__(self, relay=None, feed_key=None):
+        self.clients = set()
+        self.relay, self.feed_key = relay, feed_key
+        self.lines, self.alerts = [], []
+        self.bands = {}  # channel name -> {"live": bool, "count": n, "last": t}
+
+    def heard(self, band):
+        b = self.bands.setdefault(band, {"live": False, "count": 0, "last": 0})
+        b["count"] += 1; b["last"] = time.time(); b["live"] = True
+
+    async def broadcast(self, obj):
+        msg = json.dumps(obj)
+        for ws in list(self.clients):
+            try: await ws.send(msg)
+            except Exception: self.clients.discard(ws)
+
+    async def nmea(self, line):
+        line = line.strip()
+        if not line or line[0] not in "!$": return
+        if "VDM" in line[:7] or "VDO" in line[:7]:
+            self.heard("AIS 1 (Ch 87B)" if ",A," in line[:20] else "AIS 2 (Ch 88B)")
+        elif line[3:6] == "DSC":
+            self.heard("DSC Ch 70")
+        self.lines.append(line)
+        await self.broadcast({"type": "nmea", "line": line})
+
+    async def alert(self, kind, **fields):
+        band = {"navtex": "NAVTEX (international)", "egc": "Inmarsat-C EGC SafetyNET", "epirb": "EPIRB / PLB (COSPAS-SARSAT)"}[kind]
+        self.heard(band)
+        a = {"kind": kind, **fields}
+        self.alerts.append(a)
+        await self.broadcast({"type": "alert", **a})
+
+    async def status_loop(self):
+        while True:
+            now = time.time()
+            for b in self.bands.values(): b["live"] = now - b["last"] < 600
+            await self.broadcast({"type": "status", "bands": self.bands})
+            await asyncio.sleep(10)
+
+    async def push_loop(self):
+        """Send what was heard to the relay every few seconds (only if a relay and key are set)."""
+        while self.relay and self.feed_key:
+            await asyncio.sleep(5)
+            if not self.lines and not self.alerts: continue
+            body = json.dumps({"lines": self.lines[:2000], "alerts": self.alerts[:200]}).encode()
+            self.lines, self.alerts = self.lines[2000:], self.alerts[200:]
+            req = urllib.request.Request(self.relay.rstrip("/") + "/api/feed", data=body, method="POST",
+                                         headers={"content-type": "application/json", "x-feed-key": self.feed_key})
+            try:
+                await asyncio.to_thread(urllib.request.urlopen, req, None, 15)
+            except Exception as e:
+                print(f"relay push failed: {e}", file=sys.stderr)
+
+
+class Udp(asyncio.DatagramProtocol):
+    def __init__(self, hub): self.hub = hub
+    def datagram_received(self, data, addr):
+        for line in data.decode("ascii", "ignore").splitlines():
+            asyncio.ensure_future(self.hub.nmea(line))
+
+
+async def follow(path, on_text, split_on=None):
+    """Tail a text file that a decoder appends to."""
+    while not os.path.exists(path): await asyncio.sleep(2)
+    with open(path, "r", errors="ignore") as f:
+        f.seek(0, 2); buf = ""
+        while True:
+            chunk = f.read()
+            if not chunk: await asyncio.sleep(1); continue
+            buf += chunk
+            if split_on:
+                while split_on in buf:
+                    part, buf = buf.split(split_on, 1)
+                    await on_text(part + split_on)
+            else:
+                *done, buf = buf.split("\n")
+                for line in done: await on_text(line)
+
+
+async def serial_reader(hub, port, baud):
+    try:
+        import serial  # pyserial
+    except ImportError:
+        print("pip install pyserial to read a serial NMEA device", file=sys.stderr); return
+    s = serial.Serial(port, baud, timeout=1)
+    while True:
+        line = await asyncio.to_thread(s.readline)
+        if line: await hub.nmea(line.decode("ascii", "ignore"))
+
+
+async def main():
+    ap = argparse.ArgumentParser(description="Marine Monitor station helper (receive only)")
+    ap.add_argument("--udp", type=int, default=10110, help="UDP port for NMEA (AIS-catcher, rtl_ais, OpenCPN-style)")
+    ap.add_argument("--serial", help="serial NMEA device, e.g. /dev/ttyUSB0 or COM3")
+    ap.add_argument("--baud", type=int, default=38400, help="38400 for AIS, 4800 for most DSC radios")
+    ap.add_argument("--ws", type=int, default=8765, help="WebSocket port for the app on the local network (0 = off)")
+    ap.add_argument("--relay", help="Marine Monitor relay URL, e.g. https://marine-monitor.onrender.com")
+    ap.add_argument("--feed-key", default=os.environ.get("FEED_KEY"), help="the relay's FEED_KEY")
+    ap.add_argument("--navtex-file"); ap.add_argument("--egc-file"); ap.add_argument("--epirb-file")
+    a = ap.parse_args()
+    hub = Hub(a.relay, a.feed_key)
+    loop = asyncio.get_running_loop()
+    await loop.create_datagram_endpoint(lambda: Udp(hub), local_addr=("0.0.0.0", a.udp))
+    tasks = [hub.status_loop(), hub.push_loop()]
+    if a.serial: tasks.append(serial_reader(hub, a.serial, a.baud))
+    if a.navtex_file: tasks.append(follow(a.navtex_file, lambda t: hub.alert("navtex", text=t) if "ZCZC" in t else asyncio.sleep(0), split_on="NNNN"))
+    if a.egc_file: tasks.append(follow(a.egc_file, lambda t: hub.alert("egc", text=t.strip()) if t.strip() else asyncio.sleep(0)))
+    async def epirb_line(t):
+        m = HEX15.search(t)
+        if m: await hub.alert("epirb", hex=m.group(1).upper())
+    if a.epirb_file: tasks.append(follow(a.epirb_file, epirb_line))
+    if a.ws:
+        try:
+            import websockets
+            async def handler(ws, *_):
+                hub.clients.add(ws)
+                try: await ws.wait_closed()
+                finally: hub.clients.discard(ws)
+            tasks.append(websockets.serve(handler, "0.0.0.0", a.ws))
+            print(f"App connection: ws://{socket.gethostbyname(socket.gethostname())}:{a.ws}")
+        except ImportError:
+            print("pip install websockets to let the app connect on the local network", file=sys.stderr)
+    print(f"Listening for NMEA on UDP {a.udp}" + (f", pushing to {a.relay}" if a.relay and a.feed_key else ""))
+    await asyncio.gather(*[t if asyncio.iscoroutine(t) else asyncio.ensure_future(t) for t in tasks])
+
+
+if __name__ == "__main__":
+    try: asyncio.run(main())
+    except KeyboardInterrupt: pass

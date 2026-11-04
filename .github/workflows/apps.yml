@@ -1,0 +1,155 @@
+# Builds the Marine Monitor apps and puts them on a GitHub Release: Android APK, Windows installer +
+# portable .exe, and an unsigned iPhone .ipa. Runs when apps/ or www/ changes on main, or from
+# Actions → Marine Monitor apps → Run workflow (optionally with a release tag such as v1.0.1).
+name: Marine Monitor apps
+
+on:
+  push:
+    branches: [main]
+    paths: ['apps/**', 'www/**', '.github/workflows/apps.yml']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag (blank = v + apps/package.json version)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: apps } }
+    env:
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '21' }
+      - run: npm install --no-audit --no-fund
+        env: { ELECTRON_SKIP_BINARY_DOWNLOAD: '1' }
+      - run: npm run cap:android
+      - name: Build and sign the APK
+        working-directory: apps/android
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || secrets.ANDROID_KEYSTROKE_PASSWORD }}  # also accepts the KEYSTROKE spelling
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+          fail() { echo "::error title=Android signing::$1"; exit 1; }
+          # Copy-paste often adds spaces or line breaks: strip them (they are never part of these values).
+          clean() { printf '%s' "$1" | tr -d ' \r\n\t'; }
+          if [ "$HAS_KEYSTORE" = "true" ]; then
+            KS_PASS=$(clean "$KS_PASS"); KEY_PASS=$(clean "$KEY_PASS"); KEY_ALIAS=$(clean "$KEY_ALIAS")
+            [ -n "$KS_PASS" ] || fail "The secret ANDROID_KEYSTORE_PASSWORD is empty or missing."
+            [ -n "$KEY_ALIAS" ] || fail "The secret ANDROID_KEY_ALIAS is empty or missing (it should be: marinemonitor)."
+            [ -n "$KEY_PASS" ] || KEY_PASS=$KS_PASS
+            clean "$KS_B64" | base64 -d > release.jks 2>/dev/null || fail "ANDROID_KEYSTORE_BASE64 is not valid: paste the whole long line from item 4 again."
+            [ -s release.jks ] || fail "ANDROID_KEYSTORE_BASE64 decoded to nothing: paste the whole long line from item 4 again."
+            keytool -list -keystore release.jks -storepass "$KS_PASS" >/dev/null 2>&1 || fail "ANDROID_KEYSTORE_PASSWORD doesn't open the keystore (or ANDROID_KEYSTORE_BASE64 is incomplete)."
+            keytool -list -keystore release.jks -storepass "$KS_PASS" -alias "$KEY_ALIAS" >/dev/null 2>&1 || fail "ANDROID_KEY_ALIAS is wrong: it should be exactly: marinemonitor"
+            echo "Signing with the permanent key, certificate $(keytool -list -v -keystore release.jks -storepass "$KS_PASS" -alias "$KEY_ALIAS" | grep -m1 'SHA256:' | tr -d ' \t')"
+          else
+            echo "::warning title=Temporary signing key::Add the ANDROID_KEYSTORE_* secrets so every Marine Monitor APK is signed with the same permanent key (needed for updates and Google Play)."
+            KS_PASS=$(openssl rand -hex 16); KEY_PASS=$KS_PASS; KEY_ALIAS=temp
+            keytool -genkeypair -keystore release.jks -storetype PKCS12 -alias temp -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KS_PASS" -keypass "$KEY_PASS" -dname "CN=Marine Monitor"
+          fi
+          ./gradlew assembleRelease bundleRelease --no-daemon
+          grep -E 'targetSdkVersion|compileSdkVersion' ../android/variables.gradle 2>/dev/null || grep -E 'targetSdk|compileSdk' variables.gradle || true
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          $BT/zipalign -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk aligned.apk
+          export KS_PASS KEY_PASS
+          $BT/apksigner sign --ks release.jks --ks-pass env:KS_PASS --ks-key-alias "$KEY_ALIAS" --key-pass env:KEY_PASS --out ../MarineMonitor.apk aligned.apk \
+            || { KEY_PASS=$KS_PASS; $BT/apksigner sign --ks release.jks --ks-pass env:KS_PASS --ks-key-alias "$KEY_ALIAS" --key-pass env:KS_PASS --out ../MarineMonitor.apk aligned.apk; } \
+            || fail "The key couldn't sign the app: check ANDROID_KEY_PASSWORD (it is the same code as ANDROID_KEYSTORE_PASSWORD)."
+          $BT/apksigner verify --print-certs ../MarineMonitor.apk | grep -m1 'SHA-256' || true
+          # Google Play upload file (app bundle), signed with the same key. Only with the permanent key.
+          if [ "$HAS_KEYSTORE" = "true" ]; then
+            jarsigner -keystore release.jks -storepass "$KS_PASS" -keypass "$KEY_PASS" -signedjar ../MarineMonitor-GooglePlay.aab app/build/outputs/bundle/release/app-release.aab "$KEY_ALIAS" \
+              || jarsigner -keystore release.jks -storepass "$KS_PASS" -keypass "$KS_PASS" -signedjar ../MarineMonitor-GooglePlay.aab app/build/outputs/bundle/release/app-release.aab "$KEY_ALIAS"
+            jarsigner -verify ../MarineMonitor-GooglePlay.aab | tail -1
+          fi
+          rm -f release.jks aligned.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mm-android
+          path: |
+            apps/MarineMonitor.apk
+            apps/MarineMonitor-GooglePlay.aab
+
+  ios:
+    runs-on: macos-latest
+    defaults: { run: { working-directory: apps } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install --no-audit --no-fund
+        env: { ELECTRON_SKIP_BINARY_DOWNLOAD: '1' }
+      - run: npm run cap:ios
+      - name: Build unsigned iPhone app (sign it with an Apple Developer account to install)
+        run: |
+          cd ios/App
+          if [ -d App.xcworkspace ]; then SRC="-workspace App.xcworkspace"; else SRC="-project App.xcodeproj"; fi
+          set -o pipefail
+          xcodebuild $SRC -scheme App -configuration Release -sdk iphoneos -archivePath $PWD/build/MarineMonitor.xcarchive archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" 2>&1 | tee build.log \
+            || { echo "::error title=Xcode build failed::$(grep -E 'error:|BUILD FAILED' build.log | tail -n 25 | tr -d '\r' | sed -e ':a;N;$!ba;s/\n/%0A/g')"; exit 1; }
+          mkdir -p Payload && cp -R build/MarineMonitor.xcarchive/Products/Applications/App.app Payload/
+          zip -qr ../../MarineMonitor-iPhone-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with: { name: mm-ios, path: apps/MarineMonitor-iPhone-unsigned.ipa }
+
+  windows:
+    runs-on: windows-latest
+    defaults: { run: { working-directory: apps, shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install --no-audit --no-fund
+      - name: Package for Windows
+        run: |
+          unset CSC_LINK CSC_KEY_PASSWORD
+          set +e; npm run dist:win 2>&1 | tee build.log; s=${PIPESTATUS[0]}
+          if [ $s -ne 0 ]; then echo "::error title=Windows build failed::$(tail -n 40 build.log | tr -d '\r' | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"; fi
+          exit $s
+      - uses: actions/upload-artifact@v4
+        with: { name: mm-windows, path: apps/release/*.exe }
+
+  release:
+    needs: [android, ios, windows]
+    # Publish whatever built (a failed Android signing step shouldn't hold back iPhone and Windows).
+    if: always() && (needs.android.result == 'success' || needs.ios.result == 'success' || needs.windows.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: echo "version=$(node -p "require('./apps/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts, pattern: 'mm-*', merge-multiple: true }
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || format('v{0}', steps.v.outputs.version) }}
+          target_commitish: ${{ github.sha }}
+          name: Marine Monitor ${{ steps.v.outputs.version }}
+          make_latest: true
+          body: |
+            **Marine Monitor: coast-watch receiver for Ocean City 8PFX.** Receive only. Not for navigation.
+
+            | File | For |
+            |---|---|
+            | **MarineMonitor.apk** | Android: download, open, and allow "install from this source" when asked |
+            | **MarineMonitor-${{ steps.v.outputs.version }}-Setup.exe** | Windows: installs with a Start-menu icon. If Windows says "protected your PC", click **More info → Run anyway** |
+            | **MarineMonitor-${{ steps.v.outputs.version }}-Portable.exe** | Windows: runs without installing |
+            | **MarineMonitor-GooglePlay.aab** | Google Play Console only |
+            | **MarineMonitor-iPhone-unsigned.ipa** | iPhone: must be signed with an Apple Developer account before installing |
+
+            Or just open https://marine-monitor.onrender.com in any browser.
+          files: artifacts/*
+          overwrite_files: true

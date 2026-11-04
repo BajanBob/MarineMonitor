@@ -1,0 +1,26 @@
+name: Marine Monitor CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: npm install --no-audit --no-fund
+      - name: Decoder + relay tests (AIS, DSC, NAVTEX, 406 MHz, grid squares, bearings, weather)
+        run: npm test
+      - name: Station helper compiles
+        run: python -m py_compile helper/marine_helper.py && python helper/marine_helper.py --help
+      - name: Browser test (radar, map, GMDSS, weather, day/night faceplates)
+        shell: bash
+        run: |
+          npx playwright install --with-deps chromium
+          set +e; npm run test:e2e 2>&1 | tee e2e.log; st=${PIPESTATUS[0]}
+          if [ $st -ne 0 ]; then echo "::error title=Browser test failed::$(tail -n 20 e2e.log | tr -d '\r' | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"; fi
+          exit $st

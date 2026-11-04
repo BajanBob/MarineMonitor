@@ -1,0 +1,9 @@
+{
+  "appId": "bb.bajanbob.marinemonitor",
+  "appName": "Marine Monitor",
+  "webDir": "www",
+  "server": { "androidScheme": "http", "cleartext": true },
+  "backgroundColor": "#06141f",
+  "android": { "allowMixedContent": true, "webContentsDebuggingEnabled": false },
+  "ios": { "contentInset": "never", "webContentsDebuggingEnabled": false }
+}

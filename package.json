@@ -1,0 +1,19 @@
+{
+  "name": "marine-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Marine Monitor: coast-watch receiver — AIS, DSC, NAVTEX, EPIRB, GMDSS alerts, virtual radar and marine weather.",
+  "scripts": {
+    "start": "node server/relay.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:e2e": "node tests/e2e.mjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "playwright": "^1.55.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

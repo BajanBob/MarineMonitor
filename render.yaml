@@ -1,0 +1,18 @@
+# Render Blueprint: New → Blueprint → pick BajanBob/MarineMonitor.
+services:
+  - type: web
+    name: marine-monitor
+    runtime: node
+    plan: free
+    buildCommand: echo "no build step"
+    startCommand: node server/relay.mjs
+    healthCheckPath: /api/status
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: AISSTREAM_KEY      # free key from https://aisstream.io (internet AIS)
+        sync: false
+      - key: FEED_KEY           # any long random text (16+ characters); the station helper uses the same
+        sync: false
+      - key: AIS_BBOX           # area to follow, AISStream format [[[south,west],[north,east]]] (default: eastern Caribbean)
+        value: "[[[9.5,-65.5],[19.5,-53.5]]]"
