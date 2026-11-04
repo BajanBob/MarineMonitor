@@ -227,7 +227,7 @@ export async function getNavWarnings(fetchImpl = globalThis.fetch) {
 
 // ---------------------------------------------------------------- HTTP
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://tile.openstreetmap.org https://tiles.openseamap.org; connect-src 'self' ws: wss: https:; frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://tile.openstreetmap.org https://*.basemaps.cartocdn.com https://tiles.openseamap.org; connect-src 'self' ws: wss: https:; frame-ancestors 'none'; base-uri 'none'; object-src 'none'";
 
 export function startRelay({ port = +process.env.PORT || 8800, host = process.env.HOST || '127.0.0.1', fetchImpl = globalThis.fetch, aisKey = process.env.AISSTREAM_KEY || '', feedKey = process.env.FEED_KEY || '', now = Date.now, WebSocketImpl } = {}) {
   const fleet = createFleet({ now });
@@ -245,7 +245,7 @@ export function startRelay({ port = +process.env.PORT || 8800, host = process.en
     const p = url.pathname;
     const send = (code, body, headers = {}) => {
       const json = typeof body !== 'string' && !Buffer.isBuffer(body);
-      res.writeHead(code, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-feed-key', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'cache-control': 'no-store', ...(json ? { 'content-type': 'application/json' } : {}), ...headers });
+      res.writeHead(code, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type, x-feed-key', 'x-content-type-options': 'nosniff', 'referrer-policy': 'strict-origin-when-cross-origin', 'cache-control': 'no-store', ...(json ? { 'content-type': 'application/json' } : {}), ...headers });
       res.end(json ? JSON.stringify(body) : body);
     };
     try {
