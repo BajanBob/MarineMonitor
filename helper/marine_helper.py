@@ -39,6 +39,10 @@ class Hub:
         self.lines, self.alerts = [], []
         self.bands = {}  # channel name -> {"live": bool, "count": n, "last": t}
         self.rigs = {}   # key -> SoftReceiver ('ic9100', 'thd74')
+        self.net = None  # last station network check (netcheck.run)
+        self.netcheck_args = {}
+        self.forwards = []  # [{name, host, port, sent, last}] — AIS heard by radio, shared with AIS networks over UDP
+        self.fsock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     def heard(self, band):
         b = self.bands.setdefault(band, {"live": False, "count": 0, "last": 0})
@@ -59,6 +63,7 @@ class Hub:
         elif line[3:6] in ("DSC", "DSE"):
             self.heard("DSC Ch 70 (UM435)")
         if line[3:6] == "DSE": return  # position extension: the app shows DSC positions already
+        if self.forwards and line[3:6] in ("VDM", "VDO"): self.forward(line)
         if line[3:6] == "DSC" and extra and extra.get("to"):
             self.alerts.append({"kind": "dsc", "line": line, "to": extra["to"], "freq": extra.get("freq")})
         else:
@@ -79,12 +84,37 @@ class Hub:
             await self.broadcast(self.status())
             await asyncio.sleep(10)
 
+    def forward(self, line):
+        """Share an AIS sentence received by radio with each AIS network (vesseltracker, AISHub, MarineTraffic…)."""
+        data = (line + "\r\n").encode("ascii", "ignore")
+        for f in self.forwards:
+            try:
+                self.fsock.sendto(data, (f["host"], f["port"])); f["sent"] += 1; f["last"] = int(time.time() * 1000); f["error"] = None
+            except OSError as e:
+                f["error"] = str(e)[:80]
+
     def status(self):
         rigs = {k: r.status() for k, r in self.rigs.items()}
-        return {"type": "status", "bands": self.bands, "rigs": rigs, "rx": next(iter(rigs.values()), None)}
+        return {"type": "status", "bands": self.bands, "rigs": rigs, "rx": next(iter(rigs.values()), None), "net": self.net,
+                "forwards": [{k: f[k] for k in ("name", "host", "port", "sent", "last", "error")} for f in self.forwards]}
+
+    async def run_netcheck(self):
+        import netcheck
+        self.net = await asyncio.to_thread(netcheck.run, **self.netcheck_args)
+        bad = [c["name"] for c in self.net["checks"] if not c["ok"]]
+        print("Network check: " + ("all OK" if not bad else "FAILED: " + ", ".join(bad)))
+        await self.broadcast(self.status())
+
+    async def netcheck_loop(self):
+        while True:
+            try: await self.run_netcheck()
+            except Exception as e: print(f"network check error: {e}", file=sys.stderr)
+            await asyncio.sleep(600)
 
     async def command(self, msg):
         """From the app on the local network: change the IC-9100 scan plan. Receive-side only."""
+        if msg.get("type") == "netcheck":
+            await self.run_netcheck(); return
         rx = self.rigs.get(str(msg.get("rig") or "ic9100")) or next(iter(self.rigs.values()), None)
         if msg.get("type") == "tune" and rx:
             try: await asyncio.to_thread(rx.set_mode, str(msg.get("mode")), msg.get("dwell"))
@@ -97,7 +127,7 @@ class Hub:
             await asyncio.sleep(5)
             if not self.lines and not self.alerts and int(time.time()) % 60 > 5: continue
             st = self.status()
-            body = json.dumps({"lines": self.lines[:2000], "alerts": self.alerts[:200], "bands": st["bands"], "rx": st["rx"], "rigs": st["rigs"]}).encode()
+            body = json.dumps({"lines": self.lines[:2000], "alerts": self.alerts[:200], "bands": st["bands"], "rx": st["rx"], "rigs": st["rigs"], "net": st["net"], "forwards": st["forwards"]}).encode()
             self.lines, self.alerts = self.lines[2000:], self.alerts[200:]
             req = urllib.request.Request(self.relay.rstrip("/") + "/api/feed", data=body, method="POST",
                                          headers={"content-type": "application/json", "x-feed-key": self.feed_key})
@@ -164,11 +194,23 @@ async def main():
     ap.add_argument("--d74-band", default="B", choices=["A", "B"], help="TH-D74 band to use (B covers HF too)")
     ap.add_argument("--d74-mode", default="ais-b", help="ais-scan | ais-a | ais-b | dsc70 | ais-dsc | hf-dsc")
     ap.add_argument("--d74-dwell", type=float, default=20)
+    ap.add_argument("--forward", action="append", default=[], metavar="NAME=HOST:PORT",
+                    help="share AIS heard by radio with an AIS network over UDP, e.g. vesseltracker=HOST:PORT (repeatable)")
+    ap.add_argument("--no-netcheck", action="store_true", help="don't run the station network check (vesseltracker TCP 22, NTP, relay)")
+    ap.add_argument("--check", action="append", default=[], metavar="NAME=HOST:PORT", help="extra TCP address to test, e.g. MarineTraffic=5.9.207.224:10000")
     a = ap.parse_args()
     hub = Hub(a.relay, a.feed_key)
     loop = asyncio.get_running_loop()
     await loop.create_datagram_endpoint(lambda: Udp(hub), local_addr=("0.0.0.0", a.udp))
     tasks = [hub.status_loop(), hub.push_loop()]
+    hub.netcheck_args = {"relay": a.relay, "extra": a.check}
+    for item in a.forward:
+        name, _, hp = item.rpartition("=")
+        host, _, port = hp.rpartition(":")
+        if not host or not port.isdigit(): ap.error(f"--forward needs NAME=HOST:PORT, got {item!r}")
+        hub.forwards.append({"name": name or host, "host": host, "port": int(port), "sent": 0, "last": None, "error": None})
+        print(f"Sharing radio AIS with {name or host} ({host}:{port} UDP)")
+    if not a.no_netcheck: tasks.append(hub.netcheck_loop())
     if a.serial: tasks.append(serial_reader(hub, a.serial, a.baud))
     if a.rig == "ic9100":
         import threading

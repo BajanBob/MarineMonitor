@@ -309,8 +309,21 @@ function renderRx() {
       el('p', { class: 'small rig-now', text: cur ? `${label}: ${cur.modeName} · now on ${cur.channel}${cur.freq ? ` (${(cur.freq / 1e6).toFixed(cur.freq < 30e6 ? 4 : 3)} MHz)` : ''}` : `${label} not reporting.` }),
       el('ul', { class: 'chans' }, rigChans(label).map(li(cur))));
   }
+  const net = rxStatus?.net;
+  $('#netcheck').replaceChildren(...(net?.checks?.length ? net.checks.map((c) => el('li', { class: c.ok ? 'safety' : 'distress' },
+    el('div', {}, el('span', { class: 'lv', text: c.ok ? '✓ ' : '✗ ' }), document.createTextNode(`${c.name} · ${c.target}`)),
+    el('div', { class: 'meta', text: `${c.ok ? 'OK' : 'BLOCKED'}${c.ms != null ? ` · ${c.ms} ms` : ''}${c.detail ? ` · ${c.detail}` : ''}` }),
+    !c.ok && c.fix ? el('div', { class: 'small', text: `Fix: ${c.fix}` }) : null)).concat(net.at ? [el('li', { class: 'muted small', text: `Last checked ${new Date(net.at).toLocaleString()}` })] : [])
+    : [el('li', { class: 'muted', text: 'No result yet: the check runs on the station PC (station helper).' })]));
+  $('#netcheck-run').disabled = !rxWs;
+  const fw = rxStatus?.forwards || [];
+  $('#forwards').replaceChildren(...(fw.length ? fw.map((f) => el('li', { class: f.error ? 'distress' : f.sent ? 'safety' : 'routine' },
+    el('div', {}, el('span', { class: 'lv', text: `${f.name} ` }), document.createTextNode(`${f.host}:${f.port} UDP`)),
+    el('div', { class: 'meta', text: f.error ? `Error: ${f.error}` : `${f.sent} AIS messages shared${f.last ? ` · last ${new Date(f.last).toLocaleTimeString()}` : ''}` })))
+    : [el('li', { class: 'muted', text: 'Not sharing yet. Add --forward NAME=HOST:PORT to the station helper.' })]));
   $('#rx-status').textContent = rxWs ? `Connected to the station receiver at ${S.rx}.` : rfFeedAt ? `Station receiver reporting through the relay (last ${new Date(rfFeedAt).toLocaleTimeString()}). Scan control works on the station's local network.` : 'No station receiver connected yet: internet AIS and weather work now; direct RF needs the station helper (see below).';
 }
+$('#netcheck-run').addEventListener('click', () => { if (rxWs) { rxWs.send(JSON.stringify({ type: 'netcheck' })); toast('Checking the station network…'); } });
 function tune(rig, mode, dwell = 20) {
   if (!rxWs) return;
   rxWs.send(JSON.stringify({ type: 'tune', rig, mode, dwell }));

@@ -76,6 +76,10 @@ Use `--audio` to choose the sound device if the radio isn't the default one. For
 
 > The IC-9100's main receiver hears one frequency at a time, so AIS scan catches each AIS channel about half the time. FM audio filtering also limits AIS decoding (9600 baud). Busy waters need a dedicated dual-channel AIS receiver such as a dAISy or an RTL-SDR with AIS-catcher; those feed the same helper over UDP 10110. DSC (1200 and 100 baud) decodes well from the IC-9100.
 
+#### Sharing with AIS networks and the station network check
+- **Sharing:** add `--forward vesseltracker=HOST:PORT` (repeatable) to share the AIS your radios hear with vesseltracker.com, AISHub, MarineTraffic, VesselFinder and others. Ask each network for the UDP host and port for your station. Only AIS received by radio is shared, never internet AIS.
+- **Network check:** every 10 minutes the helper tests the vesseltracker station tunnel (outbound TCP 22 to 83.220.137.136 and 85.10.199.209), time sync (UDP 123) and the relay. The Receiver tab shows what is blocked and how to fix it on the router.
+
 #### Other receivers you can add
 Any one of these is enough to start; add more later.
 

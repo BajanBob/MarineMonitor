@@ -131,6 +131,15 @@
           <div class="band"><h3>Band C · Kenwood TH-D74 · software receiver</h3><div id="rig-thd74"></div></div>
         </div>
       </div>
+      <div class="card"><h2>Station network check</h2>
+        <p class="muted small">Tested every 10 minutes by the station PC: the vesseltracker.com station tunnel (TCP 22 to 83.220.137.136 and 85.10.199.209), time sync (UDP 123) and the Marine Monitor server. Marine Monitor can't change the router; it shows what is blocked and how to fix it.</p>
+        <ul id="netcheck" class="alerts"></ul>
+        <div class="row"><button id="netcheck-run" class="btn" type="button" title="Run the network check now (needs the station helper on the local network)">Check now</button></div>
+      </div>
+      <div class="card"><h2>Sharing with AIS networks</h2>
+        <p class="muted small">AIS heard directly by the station's radios can be shared with vesseltracker.com, AISHub, MarineTraffic, VesselFinder and others. Ask the network for a UDP address (host and port) for your station, then add <code>--forward vesseltracker=HOST:PORT</code> to the station helper. Ships from internet AIS are never re-sent.</p>
+        <ul id="forwards" class="alerts"></ul>
+      </div>
       <div class="card"><h2>Other receivers (optional)</h2><ul id="band-c" class="chans"></ul></div>
       <div class="card info">
         <h2>Connecting the radios</h2>

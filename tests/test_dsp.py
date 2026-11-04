@@ -187,6 +187,41 @@ class Kenwood(unittest.TestCase):
         self.assertEqual(rx.status()['rig'], 'thd74')
 
 
+class NetCheck(unittest.TestCase):
+    def test_tcp_ntp_and_failures(self):
+        import netcheck, socket, struct, threading, time as _t
+        srv = socket.socket(); srv.bind(('127.0.0.1', 0)); srv.listen(1)
+        def ssh():
+            c, _ = srv.accept(); c.sendall(b'SSH-2.0-OpenSSH_9.6\r\n'); c.close()
+        threading.Thread(target=ssh, daemon=True).start()
+        udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); udp.bind(('127.0.0.1', 0))
+        def ntp():
+            d, a = udp.recvfrom(64); r = bytearray(48); r[40:44] = struct.pack('!I', int(_t.time()) + 2208988800); udp.sendto(bytes(r), a)
+        threading.Thread(target=ntp, daemon=True).start()
+        ok = netcheck.tcp_check('ssh', '127.0.0.1', srv.getsockname()[1])
+        self.assertTrue(ok['ok'], ok); self.assertIn('SSH-2.0', ok['detail'])
+        n = netcheck.ntp_check('127.0.0.1', udp.getsockname()[1])
+        self.assertTrue(n['ok'], n)
+        closed = socket.socket(); closed.bind(('127.0.0.1', 0)); port = closed.getsockname()[1]; closed.close()
+        bad = netcheck.tcp_check('blocked', '127.0.0.1', port, timeout=1)
+        self.assertFalse(bad['ok']); self.assertIn('TCP 22', bad['fix'])
+        r = netcheck.run(tcp_targets=[('blocked', '127.0.0.1', port)], ntp_server='127.0.0.1')
+        self.assertFalse(r['ok']); self.assertEqual(len(r['checks']), 2)
+
+
+class Forward(unittest.TestCase):
+    def test_only_radio_ais_is_shared(self):
+        import asyncio, socket, marine_helper
+        rxs = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); rxs.bind(('127.0.0.1', 0)); rxs.settimeout(2)
+        h = marine_helper.Hub()
+        h.forwards.append({'name': 'vesseltracker', 'host': '127.0.0.1', 'port': rxs.getsockname()[1], 'sent': 0, 'last': None, 'error': None})
+        line = '!AIVDM,1,1,,A,15MgK45P3@G?fl0E`JbR0OwT0@MS,0*4E'
+        asyncio.run(h.nmea(line))
+        asyncio.run(h.nmea('$CDDSC,20,3140001110,00,00,26,900072,,,,B,*00'))   # DSC is not shared
+        self.assertEqual(rxs.recv(200).decode().strip(), line)
+        self.assertEqual(h.status()['forwards'][0]['sent'], 1)
+
+
 class Scan(unittest.TestCase):
     def test_plans(self):
         import receiver
