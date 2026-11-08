@@ -9,7 +9,7 @@
     "test": "node --test tests/*.test.mjs",
     "test:e2e": "node tests/e2e.mjs"
   },
-  "license": "MIT",
+  "license": "UNLICENSED",
   "devDependencies": {
     "playwright": "^1.55.0"
   },
